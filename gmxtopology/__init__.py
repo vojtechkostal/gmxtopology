@@ -1,4 +1,4 @@
-from . import io, parser, schema, interaction_specs
+from . import interaction_specs, io, lookup, parser, schema
 from .topology import Topology, MoleculeType
 
 __all__ = [
@@ -6,6 +6,7 @@ __all__ = [
     "MoleculeType",
     "interaction_specs",
     "io",
+    "lookup",
     "parser",
     "schema",
 ]

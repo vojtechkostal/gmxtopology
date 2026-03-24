@@ -1,33 +1,38 @@
-# gmxtop
+# gmxtopology
 
 ## Description
-`gmxtop` is a Python package for parsing and editing GROMACS topology files.
+`gmxtopology` is a Python package for parsing and editing GROMACS topology
+files.
 
 ## Package layout
 The main flow is organized around a few top-level modules:
 
-- `gmxtop.topology`: topology data models
-- `gmxtop.io`: topology file reading and writing
-- `gmxtop.parser`: parser helpers and section parsers
-- `gmxtop.schema`: schema objects used by the parser
-- `gmxtop.interaction_specs`: GROMACS interaction tables
+- `gmxtopology.topology`: topology data models
+- `gmxtopology.io`: topology file reading and writing
+- `gmxtopology.parser`: section parsing and dispatch
+- `gmxtopology.lookup`: parameter lookup and virtual-site reduction helpers
+- `gmxtopology.schema`: schema objects used by the parser
+- `gmxtopology.interaction_specs`: GROMACS interaction tables
 
 ## Installation
 ```bash
-pip install gmxtop
+pip install gmxtopology
 ```
+
+This installs `ipykernel` as well, so the environment is ready for Jupyter and
+IPython kernel use.
 
 From source:
 
 ```bash
-pip install git+https://github.com/vojtechkostal/gmxtop.git
+pip install git+https://github.com/vojtechkostal/gmxtopology.git
 ```
 
 ## Usage
-See [examples/example.ipynb](/home/vojta/code/gmxtop-git/examples/example.ipynb) for a fuller walkthrough.
+See [examples/example.ipynb](examples/example.ipynb) for a fuller walkthrough.
 
 ```python
-from gmxtop import Topology
+from gmxtopology import Topology
 
 # load topology from file
 fn_top = "./examples/topol.top"

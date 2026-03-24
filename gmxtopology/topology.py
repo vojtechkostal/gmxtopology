@@ -5,6 +5,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import (
     Any,
+    Callable,
     Dict,
     List,
     Optional,
@@ -18,6 +19,85 @@ from typing import (
     Tuple,
     Set
 )
+
+
+def _parse_int(token: str, *, ctx: str) -> int:
+    try:
+        return int(token)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer value '{token}' in {ctx}.") from exc
+
+
+def _parse_float(token: str, *, ctx: str) -> float:
+    try:
+        return float(token)
+    except ValueError as exc:
+        raise ValueError(f"Invalid float value '{token}' in {ctx}.") from exc
+
+
+def _parse_define_or_float(
+    token: str,
+    top: Topology,
+    *,
+    ctx: str,
+) -> float | str:
+    try:
+        return float(token)
+    except ValueError:
+        define_names = {define.directive for define in top.defines}
+        if token.strip("-") in define_names:
+            return token
+        raise ValueError(f"Invalid numeric value '{token}' in {ctx}.")
+
+
+def _ensure_unique(
+    items: list[Any],
+    predicate: Callable[[Any], bool],
+    message: str,
+) -> None:
+    if any(predicate(item) for item in items):
+        raise ValueError(message)
+
+
+def _find_atomtype(top: Topology, name: str) -> AtomType:
+    if name == "X":
+        return AtomType(
+            name="X",
+            bonded_type=None,
+            atnum=0,
+            mass=0.0,
+            charge=0.0,
+            ptype="A",
+            sigma=0.0,
+            epsilon=0.0,
+        )
+
+    for atomtype in top.atomtypes:
+        if atomtype.name == name:
+            return atomtype
+
+    raise ValueError(f"Atomtype {name} not found in {top.source}.")
+
+
+def _find_molecule_type(top: Topology, name: str) -> MoleculeType:
+    for moleculetype in top.moleculetypes:
+        if moleculetype.name == name:
+            return moleculetype
+
+    raise ValueError(
+        f"Molecule type '{name}' not found in topology {top.source}."
+    )
+
+
+def _find_atom(mol: MoleculeType, token: str, ctx: str) -> Atom:
+    if not token.isdigit():
+        raise ValueError(f"Invalid atom token '{token}' in {ctx}.")
+
+    atom = mol.get_atom_by_idx(int(token))
+    if atom is None:
+        raise ValueError(f"Atom index '{token}' not found in {ctx}.")
+
+    return atom
 
 
 class RenderableSection:
@@ -203,6 +283,49 @@ class Defaults(RenderableSection):
 
     SECTION = 'defaults'
 
+    @classmethod
+    def from_line(
+        cls,
+        parts: list[str],
+        top: Topology,
+        ifdef_state: Optional[str] = None,
+    ) -> Defaults:
+        ctx = f"[ defaults ] in {top.source}"
+        if top.defaults is not None:
+            raise ValueError("Multiple [ defaults ] sections found.")
+        if len(parts) < 2 or len(parts) > 6:
+            raise ValueError(f"{ctx} expects 2 to 6 values, got {len(parts)}.")
+
+        defaults = cls(
+            nbfunc=_parse_int(parts[0], ctx=ctx),
+            comb_rule=_parse_int(parts[1], ctx=ctx),
+            gen_pairs=parts[2] if len(parts) >= 3 else "no",
+            fudgeLJ=_parse_float(parts[3], ctx=ctx) if len(parts) >= 4 else 1.0,
+            fudgeQQ=_parse_float(parts[4], ctx=ctx) if len(parts) >= 5 else 1.0,
+            n=_parse_int(parts[5], ctx=ctx) if len(parts) == 6 else None,
+            ifdef_state=ifdef_state,
+        )
+
+        if defaults.nbfunc not in (1, 2):
+            raise ValueError(
+                f"Invalid nbfunc in {ctx}: expected 1 or 2, "
+                f"got {defaults.nbfunc}"
+            )
+
+        if defaults.comb_rule not in (1, 2, 3):
+            raise ValueError(
+                f"Invalid comb_rule in {ctx}: expected 1, 2, or 3, "
+                f"got {defaults.comb_rule}"
+            )
+
+        if defaults.gen_pairs not in {"yes", "no"}:
+            raise ValueError(
+                f"Invalid gen_pairs in {ctx}: expected 'yes' or 'no', "
+                f"got '{defaults.gen_pairs}'"
+            )
+
+        return defaults
+
 
 @dataclass(slots=True)
 class Define(UpdatableSection):
@@ -237,6 +360,59 @@ class AtomType(UpdatableSection):
 
     def __hash__(self):
         return hash(self.name)
+
+    @classmethod
+    def from_line(
+        cls,
+        parts: list[str],
+        top: Topology,
+        ifdef_state: Optional[str] = None,
+    ) -> AtomType:
+        ctx = f"[ atomtypes ] in {top.source}"
+        if len(parts) not in {6, 7, 8}:
+            raise ValueError(f"{ctx} expects 6, 7, or 8 values, got {len(parts)}.")
+
+        bonded_type: str | None = None
+        atnum: int | None = None
+        mass_idx = 1
+
+        if len(parts) == 7 and parts[1].isdigit():
+            atnum = _parse_int(parts[1], ctx=ctx)
+            mass_idx = 2
+        elif len(parts) == 7:
+            bonded_type = parts[1]
+            mass_idx = 2
+        elif len(parts) == 8:
+            bonded_type = parts[1]
+            atnum = _parse_int(parts[2], ctx=ctx)
+            mass_idx = 3
+
+        atomtype = cls(
+            name=parts[0],
+            bonded_type=bonded_type,
+            atnum=atnum,
+            mass=_parse_define_or_float(parts[mass_idx], top, ctx=ctx),
+            charge=_parse_define_or_float(parts[mass_idx + 1], top, ctx=ctx),
+            ptype=parts[mass_idx + 2],
+            sigma=_parse_define_or_float(parts[mass_idx + 3], top, ctx=ctx),
+            epsilon=_parse_define_or_float(parts[mass_idx + 4], top, ctx=ctx),
+            ifdef_state=ifdef_state,
+        )
+
+        if atomtype.ptype not in {"A", "S", "V", "D"}:
+            raise ValueError(
+                f"Invalid ptype of atomtype {atomtype.name} in {ctx}: "
+                f"expected 'A', 'S', 'V', or 'D', got '{atomtype.ptype}'"
+            )
+
+        _ensure_unique(
+            top.atomtypes,
+            lambda item: item.name == atomtype.name
+            and item.ifdef_state == atomtype.ifdef_state,
+            f"Duplicate atomtype '{atomtype.name}' found in topology "
+            f"{top.source}.",
+        )
+        return atomtype
 
 
 @dataclass(slots=True)
@@ -337,6 +513,40 @@ class Atom(UpdatableSection):
     SECTION = 'atoms'
     MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset({"charge"})
 
+    @classmethod
+    def from_line(
+        cls,
+        parts: list[str],
+        top: Topology,
+        mol: MoleculeType,
+        ifdef_state: Optional[str] = None,
+    ) -> Atom:
+        ctx = f"[ atoms ] in {top.source}"
+        if len(parts) != 8:
+            raise NotImplementedError(
+                f"{ctx} currently supports exactly 8 values per atom line; "
+                f"got {len(parts)}."
+            )
+
+        nr = _parse_int(parts[0], ctx=ctx)
+        if mol.get_atom_by_idx(nr) is not None and ifdef_state == "free":
+            raise ValueError(
+                f"Duplicate atom index '{nr}' in molecule '{mol.name}' "
+                f"in topology {top.source}"
+            )
+
+        return cls(
+            nr=nr,
+            type=_find_atomtype(top, parts[1]),
+            resnr=_parse_int(parts[2], ctx=ctx),
+            residue=mol,
+            name=parts[4],
+            cgnr=_parse_int(parts[5], ctx=ctx),
+            charge=_parse_define_or_float(parts[6], top, ctx=ctx),
+            mass=_parse_define_or_float(parts[7], top, ctx=ctx),
+            ifdef_state=ifdef_state,
+        )
+
 
 @dataclass(slots=True)
 class Bond(UpdatableSection):
@@ -408,6 +618,16 @@ class Exclusion(RenderableSection):
     ifdef_state: Optional[str] = "free"
 
     SECTION = 'exclusions'
+
+    @classmethod
+    def from_line(
+        cls,
+        parts: list[str],
+        mol: MoleculeType,
+        ifdef_state: Optional[str] = None,
+    ) -> Exclusion:
+        excluded = [_find_atom(mol, token, "exclusions") for token in parts]
+        return cls(excluded, ifdef_state=ifdef_state)
 
 
 @dataclass(slots=True)
@@ -555,6 +775,13 @@ class System(RenderableSection):
 
     SECTION = 'system'
 
+    @classmethod
+    def from_line(cls, parts: list[str], top: Topology) -> System:
+        if top.system is not None:
+            raise ValueError("Multiple [ system ] sections found.")
+        description = " ".join(parts) if parts else "system"
+        return cls(description)
+
 
 @dataclass(slots=True)
 class MoleculeType(RenderableSection):
@@ -584,6 +811,27 @@ class MoleculeType(RenderableSection):
 
     SECTION = 'moleculetype'
 
+    @classmethod
+    def from_line(
+        cls,
+        parts: list[str],
+        top: Topology,
+        ifdef_state: Optional[str] = None,
+    ) -> MoleculeType:
+        molecule = cls(
+            name=parts[0],
+            nrexcl=_parse_int(parts[1], ctx=f"[ moleculetype ] in {top.source}"),
+            ifdef_state=ifdef_state,
+        )
+        _ensure_unique(
+            top.moleculetypes,
+            lambda item: item.name == molecule.name
+            and item.ifdef_state == molecule.ifdef_state,
+            f"Duplicate moleculetype '{molecule.name}' found in topology "
+            f"{top.source}.",
+        )
+        return molecule
+
     def get_atom_by_idx(self, idx: int) -> Optional[Atom]:
         for atom in self.atoms:
             if atom.nr == idx:
@@ -608,7 +856,7 @@ class MoleculeType(RenderableSection):
         }
 
     def remove_vsites(self) -> None:
-        from .parser import remove_vsites
+        from .lookup import remove_vsites
         remove_vsites(self)
 
     def __repr__(self) -> str:

@@ -1,8 +1,15 @@
-from typing import List, Tuple, Mapping, Literal
 from dataclasses import replace
-from ..topology import (
-    Atom, BondType, PairType, AngleType, DihedralType, ConstraintType,
-    MoleculeType, Topology
+from typing import List, Literal, Mapping, Tuple
+
+from .topology import (
+    AngleType,
+    Atom,
+    BondType,
+    ConstraintType,
+    DihedralType,
+    MoleculeType,
+    PairType,
+    Topology,
 )
 
 
@@ -18,14 +25,15 @@ def is_exact(dt_names: List[str], at_forward: List[str], at_reverse: List[str]) 
 
 def is_wild(dt_names: List[str], at_forward: List[str], at_reverse: List[str]) -> bool:
     """Check for wildcard match of atom type names."""
-    return (
-        _match_wildcard(dt_names, at_forward) or _match_wildcard(dt_names, at_reverse)
+    return _match_wildcard(dt_names, at_forward) or _match_wildcard(
+        dt_names,
+        at_reverse,
     )
 
 
 def specificity(dt_names: List[str]) -> int:
     """Calculate specificity of a dihedral type based on non-wildcard entries."""
-    return sum(x != "X" for x in dt_names)
+    return sum(name != "X" for name in dt_names)
 
 
 Collection = (
@@ -58,87 +66,88 @@ def lookup_paramtype(
     if len(atoms) == 2:
         if section in {"pairs", "pairs_nb"}:
             name = "pair"
-            for pt in top.pairtypes:
-                pt_list = [pt.ai.name, pt.aj.name]
-                if pt_list == at_forward or pt_list == at_reverse:
-                    matched_types = pt
+            for pairtype in top.pairtypes:
+                type_names = [pairtype.ai.name, pairtype.aj.name]
+                if type_names == at_forward or type_names == at_reverse:
+                    matched_types = pairtype
                     break
         elif section == "constraints":
             name = "constraint"
-            for ct in top.constrainttypes:
-                ct_list = [ct.ai.name, ct.aj.name]
-                if ct.func != func:
+            for constrainttype in top.constrainttypes:
+                type_names = [constrainttype.ai.name, constrainttype.aj.name]
+                if constrainttype.func != func:
                     continue
-                if ct_list == at_forward or ct_list == at_reverse:
-                    matched_types = ct
+                if type_names == at_forward or type_names == at_reverse:
+                    matched_types = constrainttype
                     break
         else:
             name = "bond"
-            for bt in top.bondtypes:
-                bt_list = [bt.ai.name, bt.aj.name]
-                if bt.func != func:
+            for bondtype in top.bondtypes:
+                type_names = [bondtype.ai.name, bondtype.aj.name]
+                if bondtype.func != func:
                     continue
-                if bt_list == at_forward or bt_list == at_reverse:
-                    matched_types = bt
+                if type_names == at_forward or type_names == at_reverse:
+                    matched_types = bondtype
                     break
-
     elif len(atoms) == 3:
         name = "angle"
-        for at in top.angletypes:
-            at_list = [at.ai.name, at.aj.name, at.ak.name]
-            if at.func != func:
+        for angletype in top.angletypes:
+            type_names = [angletype.ai.name, angletype.aj.name, angletype.ak.name]
+            if angletype.func != func:
                 continue
-            if at_list == at_forward or at_list == at_reverse:
-                matched_types = at
+            if type_names == at_forward or type_names == at_reverse:
+                matched_types = angletype
                 break
-
     elif len(atoms) == 4:
         name = "dihedral"
+        candidates = [item for item in top.dihedraltypes if item.func == func]
 
-        # Only consider dihedrals with matching func
-        candidates = [dt for dt in top.dihedraltypes if dt.func == func]
+        exact_matches = []
+        wildcard_matches = []
+        best_specificity = -1
 
-        # Prefer exact matches; otherwise use wildcard matches with max specificity
-        exact = []
-        wild = []
-        best_spec = -1
+        for dihedraltype in candidates:
+            type_names = [
+                dihedraltype.ai.name,
+                dihedraltype.aj.name,
+                dihedraltype.ak.name,
+                dihedraltype.al.name,
+            ]
 
-        for dt in candidates:
-            dt_names = [dt.ai.name, dt.aj.name, dt.ak.name, dt.al.name]
-
-            if is_exact(dt_names, at_forward, at_reverse):
-                exact.append(dt)
+            if is_exact(type_names, at_forward, at_reverse):
+                exact_matches.append(dihedraltype)
                 continue
 
-            if is_wild(dt_names, at_forward, at_reverse):
-                spec = specificity(dt_names)
-                if spec > best_spec:
-                    wild = [dt]
-                    best_spec = spec
-                elif spec == best_spec:
-                    wild.append(dt)
+            if is_wild(type_names, at_forward, at_reverse):
+                matched_specificity = specificity(type_names)
+                if matched_specificity > best_specificity:
+                    wildcard_matches = [dihedraltype]
+                    best_specificity = matched_specificity
+                elif matched_specificity == best_specificity:
+                    wildcard_matches.append(dihedraltype)
 
-        picked = exact if exact else wild
+        picked = exact_matches if exact_matches else wildcard_matches
 
-        # Dedupe: keep at most one term per multiplicity (mult); allow mult=None entries
         seen_mult: set[int] = set()
         best: list[DihedralType] = []
-        for dt in picked:
-            mult = dt.params.get("mult")
+        for dihedraltype in picked:
+            mult = dihedraltype.params.get("mult")
             if mult is None:
-                best.append(dt)
+                best.append(dihedraltype)
                 continue
             if mult in seen_mult:
                 continue
             seen_mult.add(mult)
-            best.append(dt)
+            best.append(dihedraltype)
 
         matched_types = best
+    else:
+        raise ValueError(f"Unsupported interaction size {len(atoms)} in {section}.")
 
     if not matched_types:
         raise ValueError(
-            f"No {name} found for atoms "
-            f"{' '.join(at_forward)} with function {func}."
+            f"No {name} found for atoms {' '.join(at_forward)} "
+            f"with function {func}."
         )
 
     if not isinstance(matched_types, list):
@@ -170,7 +179,7 @@ def reduce_atoms(mol: MoleculeType) -> Tuple[List[Atom], Mapping[int, Atom]]:
 
 def reduce_bonded(
     mol: MoleculeType,
-    old2new: Mapping[int, Atom]
+    old2new: Mapping[int, Atom],
 ) -> Mapping[str, List]:
     """Update all connection references in the molecule based on old2new mapping."""
     new_sections = {}
@@ -182,7 +191,7 @@ def reduce_bonded(
                 for attr in ("ai", "aj", "ak", "al")
                 if hasattr(item, attr)
             ]
-            kept_atoms = [old2new[i] for i in old_ids if i in old2new]
+            kept_atoms = [old2new[index] for index in old_ids if index in old2new]
             if len(kept_atoms) == len(old_ids):
                 for attr, atom in zip(("ai", "aj", "ak", "al"), kept_atoms):
                     if hasattr(item, attr):
@@ -196,11 +205,11 @@ def reduce_bonded(
 def reduce_exclusions(mol: MoleculeType, old2new: Mapping[int, Atom]) -> List:
     """Update exclusions in the molecule based on old2new mapping."""
     new_exclusions = []
-    for ex in mol.exclusions:
-        old_ids = [a.nr for a in ex.excluded]
-        kept_atoms = [old2new[i] for i in old_ids if i in old2new]
+    for exclusion in mol.exclusions:
+        old_ids = [atom.nr for atom in exclusion.excluded]
+        kept_atoms = [old2new[index] for index in old_ids if index in old2new]
         if len(kept_atoms) >= 2:
-            new_exclusions.append(replace(ex, excluded=tuple(kept_atoms)))
+            new_exclusions.append(replace(exclusion, excluded=tuple(kept_atoms)))
     return new_exclusions
 
 

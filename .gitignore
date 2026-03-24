@@ -1,5 +1,6 @@
 __pycache__/
 gmxtop.egg-info/
+gmxtopology.egg-info/
 develop.ipynb
 build/
 dist/
@@ -8,6 +9,7 @@ tests/
 setup.cfg
 gmxtop/__pycache__/
 gmxtop/gmxtop.egg-info/
+gmxtopology/gmxtopology.egg-info/
 
 gmxtop/parse/__pycache__/
 gmxtop/specs/__pycache__/

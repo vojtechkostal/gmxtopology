@@ -1,13 +1,13 @@
 """Topology file I/O.
 
-`gmxtop.io` is the place to look for reading and writing topology files.
+`gmxtopology.io` is the place to look for reading and writing topology files.
 """
 
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 from .topology import Topology, Define, MoleculeType
-from .parser import MOLECULE_SECTION_SPECS, apply_section_line
+from .parser import MOLECULE_SECTIONS, apply_section_line
 
 
 SECTION_ALIASES = {
@@ -292,7 +292,7 @@ def write_topology(top: Topology, fn_out: Path, overwrite: bool = False) -> None
         active_state = _write_section_blocks(lines, mol.atoms, active_state)
 
         # interactions
-        for section in MOLECULE_SECTION_SPECS:
+        for section in MOLECULE_SECTIONS:
             params = getattr(mol, section, None)
             if not params:
                 continue
