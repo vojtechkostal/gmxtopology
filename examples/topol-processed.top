@@ -1,3 +1,4 @@
+#define vsa 0.12
 #define charge -10
 
 [ defaults ]
@@ -6,29 +7,35 @@
 
 [ atomtypes ]
 ;   name     atnum           mass         charge     ptype          sigma        epsilon
-     CLc         6        12.0110   0.9000000000         A       0.310000       0.292880
-   OSLPc         8        15.9994  -0.5700000000         A       0.310000       0.418400
-     OW4         8        15.9994   0.0000000000         A       0.310000       0.764029
-     HLc         1         1.0080   0.2500000000         A       0.310000       0.192464
-     HW4         1         1.0079   0.0000000000         A       0.310000       0.000000
-   HEL1s         1         1.0080   0.1500000000         A       0.310000       0.100000
-   CTL5c         6        12.0110  -0.3500000000         A       0.310000       0.334720
-    O2Lc         8        15.9994  -0.7800000000         A       0.310000       0.502080
-    OSLc         8        15.9994  -0.4900000000         A       0.310000       0.418400
-   HAL2c         1         1.0080   0.0900000000         A       0.310000       0.117152
-   CEL1s         6        12.0110  -0.1500000000         A       0.310000       0.220000
     NTLc         7        14.0070  -0.6000000000         A       0.310000       0.836800
    CTL2c         6        12.0110  -0.1000000000         A       0.310000       0.234304
-   HAL3s         1         1.0080   0.0900000000         A       0.310000       0.095000
-    OBLc         8        15.9994  -0.6300000000         A       0.310000       0.502080
-   CTL1c         6        12.0110   0.1700000000         A       0.310000       0.083680
-   CTL3s         6        12.0111  -0.0810000000         A       0.310000       0.340000
-#ifdef mod
-   HAL2s         1         1.0080   0.0900000000         A       0.310000       0.112000
-   CTL2s         6        12.0011   0.0500000000         A       0.310000       0.228000
-#endif
+     HLc         1         1.0080   0.2500000000         A       0.310000       0.192464
+   CTL5c         6        12.0110  -0.3500000000         A       0.310000       0.334720
+   HAL2c         1         1.0080   0.0900000000         A       0.310000       0.117152
      PLc        15        30.9740   1.5000000000         A       0.310000       2.447640
+    O2Lc         8        15.9994  -0.7800000000         A       0.310000       0.502080
+   OSLPc         8        15.9994  -0.5700000000         A       0.310000       0.418400
+   CTL1c         6        12.0110   0.1700000000         A       0.310000       0.083680
    HAL1c         1         1.0080   0.0900000000         A       0.310000       0.092048
+    OSLc         8        15.9994  -0.4900000000         A       0.310000       0.418400
+     CLc         6        12.0110   0.9000000000         A       0.310000       0.292880
+    OBLc         8        15.9994  -0.6300000000         A       0.310000       0.502080
+
+#ifdef mod
+[ atomtypes ]
+;   name     atnum           mass         charge     ptype          sigma        epsilon
+   CTL2s         6        12.0011   0.0500000000         A       0.310000       0.228000
+   HAL2s         1         1.0080   0.0900000000         A       0.310000       0.112000
+
+#endif
+[ atomtypes ]
+;   name     atnum           mass         charge     ptype          sigma        epsilon
+   CEL1s         6        12.0110  -0.1500000000         A       0.310000       0.220000
+   HEL1s         1         1.0080   0.1500000000         A       0.310000       0.100000
+   CTL3s         6        12.0111  -0.0810000000         A       0.310000       0.340000
+   HAL3s         1         1.0080   0.0900000000         A       0.310000       0.095000
+     OW4         8        15.9994   0.0000000000         A       0.310000       0.764029
+     HW4         1         1.0079   0.0000000000         A       0.310000       0.000000
 
 [ nonbond_params ]
 ;     ai        aj      func          sigma        epsilon
@@ -48,34 +55,61 @@
        5     CTL5c         1      POPC       C13         5   0.0000000000        12.0110
        6       HLc         1      POPC      H13A         6   0.0000000000         1.0080
        7       HLc         1      POPC      H13B         7   0.0000000000         1.0080
+
 #ifdef charge_mod
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
        8       HLc         1      POPC      H13C         8   0.0000000000         1.0080
+
 #else
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
        8       HLc         1      POPC      H13C         8   0.0000000000         1.0080
+
 #endif
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
        9     CTL5c         1      POPC       C14         9   0.0000000000        12.0110
       10       HLc         1      POPC      H14A        10   0.0000000000         1.0080
       11       HLc         1      POPC      H14B        11   0.0000000000         1.0080
       12       HLc         1      POPC      H14C        12   0.0000000000         1.0080
       13     CTL5c         1      POPC       C15        13   0.0000000000        12.0110
+
 #ifdef charge_mod_2
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
       14       HLc         1      POPC      H15A        14   0.0000000000         1.0080
       15       HLc         1      POPC      H15B        15   0.0000000000         1.0080
+
 #else
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
       14       HLc         1      POPC      H15A        14   0.0000000000         1.0080
       15       HLc         1      POPC      H15B        15   0.0000000000         1.0080
+
 #endif
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
       16       HLc         1      POPC      H15C        16   0.0000000000         1.0080
       17     CTL2c         1      POPC       C11        17   0.0000000000        12.0110
       18     HAL2c         1      POPC      H11A        18   0.0000000000         1.0080
       19     HAL2c         1      POPC      H11B        19   0.0000000000         1.0080
+
 #ifdef charge_mod
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
       20       PLc         1      POPC         P        20   0.0000000000        30.9740
       21      O2Lc         1      POPC       O13        21   0.0000000000        15.9994
+
 #else
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
       20       PLc         1      POPC         P        20   0.0000000000        30.9740
       21      O2Lc         1      POPC       O13        21   0.0000000000        15.9994
+
 #endif
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
       22      O2Lc         1      POPC       O14        22   0.0000000000        15.9994
       23     OSLPc         1      POPC       O12        23   0.0000000000        15.9994
       24     OSLPc         1      POPC       O11        24   0.0000000000        15.9994
@@ -88,7 +122,7 @@
       31       CLc         1      POPC       C21        31   0.0000000000        12.0110
       32      OBLc         1      POPC       O22        32   0.0000000000        15.9994
       33     CTL2s         1      POPC       C22        33   0.0000000000        12.0110
-      34     HAL2s         1      POPC       H2R        34   0.0000000000      free
+      34     HAL2s         1      POPC       H2R        34   0.0000000000         1.0080
       35     HAL2s         1      POPC       H2S        35   0.0000000000         1.0080
       36     CTL2c         1      POPC        C3        36   0.0000000000        12.0110
       37     HAL2c         1      POPC        HX        37   0.0000000000         1.0080
@@ -189,10 +223,13 @@
      132     HAL3s         1      POPC      H16X       132   0.0000000000         1.0080
      133     HAL3s         1      POPC      H16Y       133   0.0000000000         1.0080
      134     HAL3s         1      POPC      H16Z       134   0.0000000000         1.0080
-#ifdef extra
-     135      NTLc         1      POPC        NX       135   0.0000000000        14.0070
-#endif
 
+#ifdef extra
+[ atoms ]
+;     nr      type     resnr   residue      name      cgnr         charge           mass
+     135      NTLc         1      POPC        NX       135   0.0000000000        14.0070
+
+#endif
 [ bonds ]
 ;     ai        aj      func             b0             kb
        1         2         1         0.1510    179912.0000
@@ -1426,16 +1463,16 @@
       31        30        33        32         2         0.0000       836.8000
       40        39        42        41         2         0.0000       836.8000
 
+#ifdef distrestr
 [ distance_restraints ]
 ;     ai        aj      func      type     label            low            up1            up2         weight
-#ifdef distrestr
       10        16         1         0         1         0.0000         0.3000         0.4000         1.0000
       10        28         1         1         1         0.0000         0.3000         0.4000         1.0000
       10        46         1         1         1         0.0000         0.3000         0.4000         1.0000
       16        22         1         2         1         0.0000         0.3000         0.4000         2.5000
       16        34         1         3         1         0.0000         0.5000         0.6000         1.0000
-#endif
 
+#endif
 [ moleculetype ]
 ;   name    nrexcl
      SOL         2

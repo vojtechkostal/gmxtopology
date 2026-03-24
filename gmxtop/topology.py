@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import (
@@ -11,54 +12,16 @@ from typing import (
     FrozenSet,
     Mapping,
     get_type_hints,
+    get_origin,
+    get_args,
+    Union,
     Tuple,
     Set
 )
 
 
-class MixIn:
-    """
-    Mix-in class to provide in-place parameter updates.
-    """
-
-    MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset()
-
-    def update(self, **kwargs: Any) -> None:
-        """
-        Update parameters in-place.
-
-        Policy:
-        - If `self.params` exists and is a dict:
-          only overwrite existing keys in that dict.
-        - Otherwise: only overwrite attributes listed in `MODIFIABLE`.
-        """
-        params = getattr(self, "params", None)
-
-        if isinstance(params, dict):
-            unknown = kwargs.keys() - params.keys()
-            if unknown:
-                raise KeyError(
-                    f"Cannot add new parameter(s) {sorted(unknown)}; "
-                    f"allowed keys are {sorted(params.keys())}"
-                )
-            params.update(kwargs)
-            return
-
-        # Attribute-based update
-        allowed = type(self).MODIFIABLE
-        unknown = kwargs.keys() - allowed
-        if unknown:
-            raise KeyError(
-                f"Parameter(s) {sorted(unknown)} are not modifiable "
-                f"for {type(self).__name__}; allowed are {sorted(allowed)}"
-            )
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
-class Description:
-    """Base class for all sections in a topology file.
-    Provides methods for rendering section headers, legends, and values."""
+class RenderableSection:
+    """Shared rendering helpers for topology records."""
 
     SECTION = ClassVar[str]
     W = 10
@@ -73,32 +36,67 @@ class Description:
         """Section header string."""
         return f"[ {self.SECTION} ]"
 
+    def _field_type(self, annotation: Any) -> Optional[type]:
+        if annotation in {float, int, str}:
+            return annotation
+
+        origin = get_origin(annotation)
+        if origin not in (types.UnionType, Union):
+            return None
+
+        inner_types = [
+            arg for arg in get_args(annotation)
+            if isinstance(arg, type) and arg is not type(None)
+        ]
+        if len(inner_types) == 1 and inner_types[0] in {float, int, str}:
+            return inner_types[0]
+        return None
+
+    def _render_value(
+        self,
+        field_name: str,
+        annotation: Any,
+        value: Any,
+    ) -> Optional[tuple[Any, type]]:
+        scalar_type = self._field_type(annotation)
+        if scalar_type is not None:
+            return value, scalar_type
+
+        if annotation in {AtomType, MoleculeType}:
+            return value.name, str
+
+        if annotation == Atom:
+            return value.nr, int
+
+        if field_name == "excluded":
+            return " ".join(str(atom.nr) for atom in value), str
+
+        return None
+
     @property
     def args(self) -> Dict[str, Any]:
-        """Extracts the fields and their values/types for rendering."""
+        """Extract fields and their display values for rendering."""
         hints = get_type_hints(type(self))
-
         out: Dict[str, Tuple[Any, type]] = {}
-        for k, t in hints.items():
-            if k in ["MODIFIABLE", "SECTION"]:
+
+        for field_name, annotation in hints.items():
+            if field_name in {"MODIFIABLE", "SECTION", "ifdef_state"}:
                 continue
 
-            val = getattr(self, k)
-
-            if t in [float, int, str]:
-                out[k] = (val, t)
-            elif t in [AtomType, MoleculeType]:
-                out[k] = (val.name, str)
-            elif t == Atom:
-                out[k] = (val.nr, int)
-            elif k == "excluded":
-                names = " ".join(str(a.nr) for a in val)
-                out[k] = (names, str)
-            elif k == "params":
-                for pk, pv in val.items():
-                    out[pk] = (pv, type(pv))
-            else:
+            value = getattr(self, field_name)
+            if value is None:
                 continue
+
+            if field_name == "params":
+                out.update({
+                    param_name: (param_value, type(param_value))
+                    for param_name, param_value in value.items()
+                })
+                continue
+
+            rendered = self._render_value(field_name, annotation, value)
+            if rendered is not None:
+                out[field_name] = rendered
 
         return out
 
@@ -160,25 +158,54 @@ class Description:
         """Return the legend string (parameter names)."""
         return self._render(values=False)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return the values string (parameter values)."""
         return self._render(values=True)
 
 
+class UpdatableSection(RenderableSection):
+    """Renderable section that allows restricted in-place updates."""
+
+    MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset()
+
+    def update(self, **kwargs: Any) -> None:
+        params = getattr(self, "params", None)
+        if isinstance(params, dict):
+            unknown = kwargs.keys() - params.keys()
+            if unknown:
+                raise KeyError(
+                    f"Cannot add new parameter(s) {sorted(unknown)}; "
+                    f"allowed keys are {sorted(params.keys())}"
+                )
+            params.update(kwargs)
+            return
+
+        unknown = kwargs.keys() - type(self).MODIFIABLE
+        if unknown:
+            raise KeyError(
+                f"Parameter(s) {sorted(unknown)} are not modifiable "
+                f"for {type(self).__name__}; allowed are "
+                f"{sorted(type(self).MODIFIABLE)}"
+            )
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
 @dataclass(slots=True)
-class Defaults(Description):
+class Defaults(RenderableSection):
     nbfunc: int
     comb_rule: int
     gen_pairs: str
     fudgeLJ: float
     fudgeQQ: float
+    n: Optional[int] = None
     ifdef_state: Optional[str] = "free"
 
     SECTION = 'defaults'
 
 
 @dataclass(slots=True)
-class Define(MixIn):
+class Define(UpdatableSection):
     directive: str
     argument: Optional[str | int | float]
 
@@ -190,12 +217,14 @@ class Define(MixIn):
     def __str__(self) -> str:
         if self.argument is not None:
             return f"#define {self.directive} {self.argument}"
+        return f"#define {self.directive}"
 
 
 @dataclass(slots=True)
-class AtomType(MixIn, Description):
+class AtomType(UpdatableSection):
     name: str
-    atnum: int
+    bonded_type: Optional[str]
+    atnum: Optional[int]
     mass: float
     charge: float
     ptype: str
@@ -211,7 +240,7 @@ class AtomType(MixIn, Description):
 
 
 @dataclass(slots=True)
-class BondType(MixIn, Description):
+class BondType(UpdatableSection):
     ai: AtomType
     aj: AtomType
     func: int
@@ -222,7 +251,7 @@ class BondType(MixIn, Description):
 
 
 @dataclass(slots=True)
-class PairType(MixIn, Description):
+class PairType(UpdatableSection):
     ai: AtomType
     aj: AtomType
     func: int
@@ -233,7 +262,7 @@ class PairType(MixIn, Description):
 
 
 @dataclass(slots=True)
-class AngleType(MixIn, Description):
+class AngleType(UpdatableSection):
     ai: AtomType
     aj: AtomType
     ak: AtomType
@@ -245,7 +274,7 @@ class AngleType(MixIn, Description):
 
 
 @dataclass(slots=True)
-class DihedralType(MixIn, Description):
+class DihedralType(UpdatableSection):
     ai: AtomType
     aj: AtomType
     ak: AtomType
@@ -258,7 +287,7 @@ class DihedralType(MixIn, Description):
 
 
 @dataclass(slots=True)
-class ConstraintType(MixIn, Description):
+class ConstraintType(UpdatableSection):
     ai: AtomType
     aj: AtomType
     func: int
@@ -269,7 +298,18 @@ class ConstraintType(MixIn, Description):
 
 
 @dataclass(slots=True)
-class NonBondParam(MixIn, Description):
+class Constraint(UpdatableSection):
+    ai: Atom
+    aj: Atom
+    func: int
+    params: Mapping[str, float | int | str] = field(default_factory=dict)
+    ifdef_state: Optional[str] = "free"
+
+    SECTION = 'constraints'
+
+
+@dataclass(slots=True)
+class NonBondParam(UpdatableSection):
     ai: AtomType
     aj: AtomType
     func: int
@@ -283,7 +323,7 @@ class NonBondParam(MixIn, Description):
 
 
 @dataclass(slots=True)
-class Atom(MixIn, Description):
+class Atom(UpdatableSection):
     nr: int
     type: AtomType
     resnr: int
@@ -299,7 +339,7 @@ class Atom(MixIn, Description):
 
 
 @dataclass(slots=True)
-class Bond(MixIn, Description):
+class Bond(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -310,7 +350,7 @@ class Bond(MixIn, Description):
 
 
 @dataclass(slots=True)
-class Pair(MixIn, Description):
+class Pair(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -321,7 +361,7 @@ class Pair(MixIn, Description):
 
 
 @dataclass(slots=True)
-class PairNB(MixIn, Description):
+class PairNB(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -332,7 +372,7 @@ class PairNB(MixIn, Description):
 
 
 @dataclass(slots=True)
-class Angle(MixIn, Description):
+class Angle(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -344,7 +384,7 @@ class Angle(MixIn, Description):
 
 
 @dataclass(slots=True)
-class Dihedral(MixIn, Description):
+class Dihedral(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -363,7 +403,7 @@ class Dihedral(MixIn, Description):
 
 
 @dataclass(slots=True)
-class Exclusion(Description):
+class Exclusion(RenderableSection):
     excluded: List[Atom]  # variable length per line
     ifdef_state: Optional[str] = "free"
 
@@ -371,7 +411,7 @@ class Exclusion(Description):
 
 
 @dataclass(slots=True)
-class Settle(MixIn, Description):
+class Settle(UpdatableSection):
     ai: Atom
     func: int
     params: Dict[str, float] = field(default_factory=dict)
@@ -381,7 +421,7 @@ class Settle(MixIn, Description):
 
 
 @dataclass(slots=True)
-class VirtualSite1(MixIn, Description):
+class VirtualSite1(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -392,7 +432,7 @@ class VirtualSite1(MixIn, Description):
 
 
 @dataclass(slots=True)
-class VirtualSite2(MixIn, Description):
+class VirtualSite2(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -404,7 +444,7 @@ class VirtualSite2(MixIn, Description):
 
 
 @dataclass(slots=True)
-class VirtualSite3(MixIn, Description):
+class VirtualSite3(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -417,7 +457,7 @@ class VirtualSite3(MixIn, Description):
 
 
 @dataclass(slots=True)
-class VirtualSite4(MixIn, Description):
+class VirtualSite4(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -431,7 +471,7 @@ class VirtualSite4(MixIn, Description):
 
 
 @dataclass(slots=True)
-class VirtualSiteN(MixIn, Description):
+class VirtualSiteN(UpdatableSection):
     ai: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
@@ -441,7 +481,7 @@ class VirtualSiteN(MixIn, Description):
 
 
 @dataclass(slots=True)
-class PositionRestraint(MixIn, Description):
+class PositionRestraint(UpdatableSection):
     ai: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
@@ -451,7 +491,7 @@ class PositionRestraint(MixIn, Description):
 
 
 @dataclass(slots=True)
-class DistanceRestraint(MixIn, Description):
+class DistanceRestraint(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -462,7 +502,7 @@ class DistanceRestraint(MixIn, Description):
 
 
 @dataclass(slots=True)
-class DihedralRestraint(MixIn, Description):
+class DihedralRestraint(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -475,7 +515,7 @@ class DihedralRestraint(MixIn, Description):
 
 
 @dataclass(slots=True)
-class OrientationRestraint(MixIn, Description):
+class OrientationRestraint(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -486,7 +526,7 @@ class OrientationRestraint(MixIn, Description):
 
 
 @dataclass(slots=True)
-class AngleRestraint(MixIn, Description):
+class AngleRestraint(UpdatableSection):
     ai: Atom
     aj: Atom
     ak: Atom
@@ -499,7 +539,7 @@ class AngleRestraint(MixIn, Description):
 
 
 @dataclass(slots=True)
-class AngleRestraintZ(MixIn, Description):
+class AngleRestraintZ(UpdatableSection):
     ai: Atom
     aj: Atom
     func: int
@@ -510,14 +550,14 @@ class AngleRestraintZ(MixIn, Description):
 
 
 @dataclass(slots=True)
-class System(Description):
+class System(RenderableSection):
     description: str = "system"
 
     SECTION = 'system'
 
 
 @dataclass(slots=True)
-class MoleculeType(Description):
+class MoleculeType(RenderableSection):
     name: str
     nrexcl: int
     atoms: List[Atom] = field(default_factory=list)
@@ -526,6 +566,7 @@ class MoleculeType(Description):
     pairs_nb: List[PairNB] = field(default_factory=list)
     angles: List[Angle] = field(default_factory=list)
     dihedrals: List[Dihedral] = field(default_factory=list)
+    constraints: List[Constraint] = field(default_factory=list)
     exclusions: List[Exclusion] = field(default_factory=list)
     settles: List[Settle] = field(default_factory=list)
     virtual_sites1: List[VirtualSite1] = field(default_factory=list)
@@ -558,16 +599,16 @@ class MoleculeType(Description):
         }
 
     @property
-    def _connention_sections(self):
+    def _connection_sections(self):
         return {
-            "bonds", "pairs", "angles", "dihedrals",
+            "bonds", "pairs", "angles", "dihedrals", "constraints",
             "position_restraints", "distance_restraints",
             "dihedral_restraints", "orientation_restraints",
             "angle_restraints", "angle_restraints_z"
         }
 
     def remove_vsites(self) -> None:
-        from .parse.helpers import remove_vsites
+        from .parser import remove_vsites
         remove_vsites(self)
 
     def __repr__(self) -> str:
@@ -585,10 +626,11 @@ class Topology:
     pairtypes: List[PairType] = field(default_factory=list)
     angletypes: List[AngleType] = field(default_factory=list)
     dihedraltypes: List[DihedralType] = field(default_factory=list)
+    constrainttypes: List[ConstraintType] = field(default_factory=list)
     moleculetypes: List[MoleculeType] = field(default_factory=list)
 
     system: Optional[System] = None
-    molecules: Dict[MoleculeType, int] = field(default_factory=dict)
+    molecules: Dict[str, Tuple[MoleculeType, int]] = field(default_factory=dict)
 
     defines: Set[Define] = field(default_factory=set)
 
@@ -604,15 +646,19 @@ class Topology:
 
     def __post_init__(self) -> None:
         self.source = Path(self.source).resolve()
-        from .read_write import read_topology
+        from .io import read_topology
         read_topology(self.source, self)
 
     def write(self, fn: str | Path, **kwargs) -> None:
-        from .read_write import write_topology
+        from .io import write_topology
         write_topology(self, Path(fn).resolve(), **kwargs)
 
     def __repr__(self) -> str:
+        system_name = self.system.description if self.system is not None else "unset"
+        molecule_count = sum(count for _, count in self.molecules.values())
         return (
-            f"<Topology source={self.source} "
-            f"including {len(self.molecules)} molecules>"
+            f"<Topology system='{system_name}' "
+            f"moleculetypes={len(self.moleculetypes)} "
+            f"molecules={molecule_count} "
+            f"atoms={len(self.atoms)}>"
         )

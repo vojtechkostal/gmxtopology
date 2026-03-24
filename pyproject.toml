@@ -1,13 +1,17 @@
 [project]
 name = "gmxtop"
 version = "0.1.0"
-description = "A Python library for handling GROMACS topology files."
+description = "A Python library for parsing and editing GROMACS topology files."
 authors = [{ name = "Vojtech Kostal", email = "vojtakostal8@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["GROMACS", "topology", "molecular dynamics", "simulation"]
-
 license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
 
 [project.urls]
 Repository = "https://github.com/vojtechkostal/gmxtop"

@@ -2,10 +2,14 @@ __pycache__/
 gmxtop.egg-info/
 develop.ipynb
 build/
+dist/
 test/
+tests/
 setup.cfg
 gmxtop/__pycache__/
 gmxtop/gmxtop.egg-info/
 
 gmxtop/parse/__pycache__/
 gmxtop/specs/__pycache__/
+examples/.ipynb_checkpoints/
+.vscode/

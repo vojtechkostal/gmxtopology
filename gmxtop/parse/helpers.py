@@ -1,7 +1,7 @@
-from typing import List, Tuple, Mapping
+from typing import List, Tuple, Mapping, Literal
 from dataclasses import replace
-from ..sections import (
-    Atom, BondType, PairType, AngleType, DihedralType,
+from ..topology import (
+    Atom, BondType, PairType, AngleType, DihedralType, ConstraintType,
     MoleculeType, Topology
 )
 
@@ -28,42 +28,68 @@ def specificity(dt_names: List[str]) -> int:
     return sum(x != "X" for x in dt_names)
 
 
-Collection = List[BondType] | List[PairType] | List[AngleType] | List[DihedralType]
+Collection = (
+    List[BondType]
+    | List[PairType]
+    | List[AngleType]
+    | List[DihedralType]
+    | List[ConstraintType]
+)
 
 
 def lookup_paramtype(
     top: Topology,
     *atoms: Atom,
     func: int,
-    pair=False
+    section: Literal[
+        "bonds",
+        "pairs",
+        "pairs_nb",
+        "angles",
+        "dihedrals",
+        "constraints",
+    ],
 ) -> List[Collection]:
     """Lookup the parameter type(s) for the given atoms in the topology."""
 
     at_forward = [a.type.name if isinstance(a, Atom) else a for a in atoms]
     at_reverse = list(reversed(at_forward))
-    paramtype = None
+    matched_types = None
     if len(atoms) == 2:
-        if pair:
+        if section in {"pairs", "pairs_nb"}:
             name = "pair"
             for pt in top.pairtypes:
                 pt_list = [pt.ai.name, pt.aj.name]
                 if pt_list == at_forward or pt_list == at_reverse:
-                    paramtype = pt
+                    matched_types = pt
+                    break
+        elif section == "constraints":
+            name = "constraint"
+            for ct in top.constrainttypes:
+                ct_list = [ct.ai.name, ct.aj.name]
+                if ct.func != func:
+                    continue
+                if ct_list == at_forward or ct_list == at_reverse:
+                    matched_types = ct
                     break
         else:
             name = "bond"
             for bt in top.bondtypes:
                 bt_list = [bt.ai.name, bt.aj.name]
+                if bt.func != func:
+                    continue
                 if bt_list == at_forward or bt_list == at_reverse:
-                    paramtype = bt
+                    matched_types = bt
                     break
 
     elif len(atoms) == 3:
         name = "angle"
         for at in top.angletypes:
             at_list = [at.ai.name, at.aj.name, at.ak.name]
+            if at.func != func:
+                continue
             if at_list == at_forward or at_list == at_reverse:
-                paramtype = at
+                matched_types = at
                 break
 
     elif len(atoms) == 4:
@@ -107,18 +133,18 @@ def lookup_paramtype(
             seen_mult.add(mult)
             best.append(dt)
 
-        paramtype = best
+        matched_types = best
 
-    if not paramtype:
+    if not matched_types:
         raise ValueError(
             f"No {name} found for atoms "
             f"{' '.join(at_forward)} with function {func}."
         )
 
-    if not isinstance(paramtype, list):
-        paramtype = [paramtype]
+    if not isinstance(matched_types, list):
+        matched_types = [matched_types]
 
-    return paramtype
+    return matched_types
 
 
 def reduce_atoms(mol: MoleculeType) -> Tuple[List[Atom], Mapping[int, Atom]]:
@@ -148,7 +174,7 @@ def reduce_bonded(
 ) -> Mapping[str, List]:
     """Update all connection references in the molecule based on old2new mapping."""
     new_sections = {}
-    for section in mol._connention_sections:
+    for section in mol._connection_sections:
         new_list = []
         for item in getattr(mol, section):
             old_ids = [

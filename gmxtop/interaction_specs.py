@@ -1,56 +1,45 @@
-# This module defines interaction specifications for molecular simulations.
+"""GROMACS interaction schemas keyed by topology directive and function type."""
 
-from .core import Params, InteractionSpec
+from .schema import ParamSpec, InteractionSpec
+
 
 BONDS = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("b0", "kb"),
             parsers=(float, float),
-            desc="harmonic bond"
+            desc="harmonic bond",
         ),
-        2: Params(
-            names=("b0", "kb"),
-            parsers=(float, float),
-            desc="G96 bond"
-        ),
-        3: Params(
+        2: ParamSpec(names=("b0", "kb"), parsers=(float, float), desc="G96 bond"),
+        3: ParamSpec(
             names=("b0", "D", "beta"),
             parsers=(float, float, float),
-            desc="Morse bond"
+            desc="Morse bond",
         ),
-        4: Params(
+        4: ParamSpec(
             names=("b0", "C2", "C3"),
             parsers=(float, float, float),
-            desc="cubic bond"
+            desc="cubic bond",
         ),
-        5: Params(
-            names=(),
-            parsers=(),
-            desc="connection (no parameters)"
-        ),
-        6: Params(
+        5: ParamSpec(names=(), parsers=(), desc="connection (no parameters)"),
+        6: ParamSpec(
             names=("b0", "kb"),
             parsers=(float, float),
-            desc="harmonic potential"
+            desc="harmonic potential",
         ),
-        7: Params(
-            names=("bm", "kb"),
-            parsers=(float, float),
-            desc="FENE bond"
-        ),
-        8: Params(
+        7: ParamSpec(names=("bm", "kb"), parsers=(float, float), desc="FENE bond"),
+        8: ParamSpec(
             names=("table", "k"),
             parsers=(int, float),
-            desc="tabulated bond"
+            desc="tabulated bond",
         ),
-        9: Params(
+        9: ParamSpec(
             names=("table", "k"),
             parsers=(int, float),
-            desc="tabulated bond (variant)"
+            desc="tabulated bond (variant)",
         ),
-        10: Params(
+        10: ParamSpec(
             names=("low", "up1", "up2", "kdr"),
             parsers=(float, float, float, float),
             desc="restraint",
@@ -58,16 +47,15 @@ BONDS = InteractionSpec(
     },
 )
 
-
 PAIRS = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("sigma", "epsilon"),
             parsers=(float, float),
-            desc="Lennard-Jones pair"
+            desc="Lennard-Jones pair",
         ),
-        2: Params(
+        2: ParamSpec(
             names=("fudgeQQ", "q1", "q2", "sigma", "epsilon"),
             parsers=(float, float, float, float, float),
             desc="Coulomb + LJ pair",
@@ -78,7 +66,7 @@ PAIRS = InteractionSpec(
 PAIRS_NB = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("qi", "qj", "V", "W"),
             parsers=(float, float, float, float),
             desc="non-bonded pair",
@@ -89,40 +77,38 @@ PAIRS_NB = InteractionSpec(
 ANGLES = InteractionSpec(
     n_atoms=3,
     funcs={
-        1: Params(
-            names=("th0", "kth"),
-            parsers=(float, float),
-            desc="angle"
-        ),
-        2: Params(
-            names=("th0", "kth"),
-            parsers=(float, float),
-            desc="G96 angle"
-        ),
-        3: Params(
+        1: ParamSpec(names=("th0", "kth"), parsers=(float, float), desc="angle"),
+        2: ParamSpec(names=("th0", "kth"), parsers=(float, float), desc="G96 angle"),
+        3: ParamSpec(
             names=("r1e", "r2e", "krr"),
             parsers=(float, float, float),
             desc="cross bond-bond",
         ),
-        4: Params(
+        4: ParamSpec(
             names=("r1e", "r2e", "r3e", "krth"),
             parsers=(float, float, float, float),
             desc="cross bond-angle",
         ),
-        5: Params(
+        5: ParamSpec(
             names=("th0", "kth", "r13", "kub"),
             parsers=(float, float, float, float),
-            desc=" Urey-Bradley",
+            desc="Urey-Bradley",
         ),
-        6: Params(
+        6: ParamSpec(
             names=("th0", "C0", "C1", "C2", "C3", "C4"),
             parsers=(float, float, float, float, float, float),
             desc="quartic angle",
         ),
-        8: Params(
+        8: ParamSpec(
             names=("table", "k"),
             parsers=(int, float),
-            desc="tabulated angle"
+            desc="tabulated angle",
+        ),
+        9: ParamSpec(names=("a0", "klin"), parsers=(float, float), desc="linear angle"),
+        10: ParamSpec(
+            names=("th0", "kth"),
+            parsers=(float, float),
+            desc="restricted bending potential",
         ),
     },
 )
@@ -130,47 +116,47 @@ ANGLES = InteractionSpec(
 DIHEDRALS = InteractionSpec(
     n_atoms=4,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("phi_s", "kphi", "mult"),
             parsers=(float, float, int),
             desc="proper dihedral",
         ),
-        2: Params(
+        2: ParamSpec(
             names=("xi0", "kxi"),
             parsers=(float, float),
-            desc="improper dihedral"
+            desc="improper dihedral",
         ),
-        3: Params(
+        3: ParamSpec(
             names=("C0", "C1", "C2", "C3", "C4", "C5"),
             parsers=(float, float, float, float, float, float),
             desc="RB dihedral",
         ),
-        4: Params(
+        4: ParamSpec(
             names=("phi_s", "kphi", "mult"),
             parsers=(float, float, int),
             desc="periodic improper",
         ),
-        5: Params(
+        5: ParamSpec(
             names=("C1", "C2", "C3", "C4", "C5"),
             parsers=(float, float, float, float, float),
             desc="Fourier dihedral",
         ),
-        8: Params(
+        8: ParamSpec(
             names=("table", "k"),
             parsers=(int, float),
-            desc="tabulated dihedral"
+            desc="tabulated dihedral",
         ),
-        9: Params(
+        9: ParamSpec(
             names=("phi_s", "kphi", "mult"),
             parsers=(float, float, int),
             desc="proper dihedral (multiple)",
         ),
-        10: Params(
+        10: ParamSpec(
             names=("phi0", "kphi"),
             parsers=(float, float),
-            desc="restricted dihedral"
+            desc="restricted dihedral",
         ),
-        11: Params(
+        11: ParamSpec(
             names=("kphi", "a0", "a1", "a2", "a3", "a4"),
             parsers=(float, float, float, float, float, float),
             desc="combined bending-torsion",
@@ -178,33 +164,23 @@ DIHEDRALS = InteractionSpec(
     },
 )
 
-
 CONSTRAINTS = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
-            names=("b0",),
-            parsers=(float,),
-            desc="constraint"
-        ),
-        2: Params(
-            names=("b0",),
-            parsers=(float,),
-            desc="constraint"
-        ),
+        1: ParamSpec(names=("b0",), parsers=(float,), desc="constraint"),
+        2: ParamSpec(names=("b0",), parsers=(float,), desc="constraint"),
     },
 )
-
 
 NONBOND_PARAMS = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("sigma", "epsilon"),
             parsers=(float, float),
             desc="Lennard-Jones parameters",
         ),
-        2: Params(
+        2: ParamSpec(
             names=("a", "b", "c6"),
             parsers=(float, float, float),
             desc="Buckingham parameters",
@@ -212,14 +188,13 @@ NONBOND_PARAMS = InteractionSpec(
     },
 )
 
-
 SETTLES = InteractionSpec(
     n_atoms=1,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("doh", "dhh"),
             parsers=(float, float),
-            desc="SETTLES parameters"
+            desc="SETTLES parameters",
         ),
     },
 )
@@ -227,26 +202,18 @@ SETTLES = InteractionSpec(
 VIRTUAL_SITES1 = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
-            names=("a",),
-            parsers=(float,),
-            desc="1-body virtual site"
-        ),
+        1: ParamSpec(names=("a",), parsers=(float,), desc="1-body virtual site"),
     },
 )
 
 VIRTUAL_SITES2 = InteractionSpec(
     n_atoms=3,
     funcs={
-        1: Params(
-            names=("a",),
-            parsers=(float,),
-            desc="2-body virtual site"
-        ),
-        2: Params(
+        1: ParamSpec(names=("a",), parsers=(float,), desc="2-body virtual site"),
+        2: ParamSpec(
             names=("d",),
             parsers=(float,),
-            desc="2-body virtual site (fd)"
+            desc="2-body virtual site (fd)",
         ),
     },
 )
@@ -254,22 +221,22 @@ VIRTUAL_SITES2 = InteractionSpec(
 VIRTUAL_SITES3 = InteractionSpec(
     n_atoms=4,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("a", "b"),
             parsers=(float, float),
-            desc="3-body virtual site"
+            desc="3-body virtual site",
         ),
-        2: Params(
+        2: ParamSpec(
             names=("a", "d"),
             parsers=(float, float),
-            desc="3-body virtual site (fd)"
+            desc="3-body virtual site (fd)",
         ),
-        3: Params(
+        3: ParamSpec(
             names=("th", "d"),
             parsers=(float, float),
-            desc="3-body virtual site (fad)"
+            desc="3-body virtual site (fad)",
         ),
-        4: Params(
+        4: ParamSpec(
             names=("a", "b", "c"),
             parsers=(float, float, float),
             desc="3-body virtual site (out)",
@@ -280,7 +247,7 @@ VIRTUAL_SITES3 = InteractionSpec(
 VIRTUAL_SITES4 = InteractionSpec(
     n_atoms=5,
     funcs={
-        2: Params(
+        2: ParamSpec(
             names=("a", "b", "c"),
             parsers=(float, float, float),
             desc="4-body virtual site (fdn)",
@@ -291,33 +258,36 @@ VIRTUAL_SITES4 = InteractionSpec(
 VIRTUAL_SITESN = InteractionSpec(
     n_atoms=1,
     funcs={
-        1: Params(
-            names=("from",),
-            parsers=(str,),
-            desc="N-body virtual site (COG)"
-            ),
-        2: Params(
-            names=("from",),
-            parsers=(str,),
-            desc="N-body virtual site (COM)"
-            ),
-        3: Params(
-            names=("from",),
-            parsers=(str,),
-            desc="N-body virtual site (COW)"
-            ),
+        1: ParamSpec(
+            names=(),
+            parsers=(),
+            desc="N-body virtual site (COG)",
+            rest_name="from",
+        ),
+        2: ParamSpec(
+            names=(),
+            parsers=(),
+            desc="N-body virtual site (COM)",
+            rest_name="from",
+        ),
+        3: ParamSpec(
+            names=(),
+            parsers=(),
+            desc="N-body virtual site (COW)",
+            rest_name="from",
+        ),
     },
 )
 
 POSITION_RESTRAINTS = InteractionSpec(
     n_atoms=1,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("kx", "ky", "kz"),
             parsers=(float, float, float),
             desc="position restraints",
         ),
-        2: Params(
+        2: ParamSpec(
             names=("g", "r", "k"),
             parsers=(float, float, float),
             desc="position restraints variant",
@@ -325,11 +295,10 @@ POSITION_RESTRAINTS = InteractionSpec(
     },
 )
 
-
 DISTANCE_RESTRAINTS = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("type", "label", "low", "up1", "up2", "weight"),
             parsers=(int, int, float, float, float, float),
             desc="distance restraints",
@@ -337,11 +306,10 @@ DISTANCE_RESTRAINTS = InteractionSpec(
     },
 )
 
-
 DIHEDRAL_RESTRAINTS = InteractionSpec(
     n_atoms=4,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("phi0", "dphi", "kdihr"),
             parsers=(float, float, int),
             desc="dihedral restraints",
@@ -349,11 +317,10 @@ DIHEDRAL_RESTRAINTS = InteractionSpec(
     },
 )
 
-
 ORIENTATION_RESTRAINTS = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("exp", "label", "alpha", "c", "obs", "weight"),
             parsers=(int, int, float, float, float, float),
             desc="orientation restraints",
@@ -361,11 +328,10 @@ ORIENTATION_RESTRAINTS = InteractionSpec(
     },
 )
 
-
 ANGLE_RESTRAINTS = InteractionSpec(
     n_atoms=4,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("theta0", "kc", "mult"),
             parsers=(float, float, int),
             desc="angle restraints",
@@ -373,11 +339,10 @@ ANGLE_RESTRAINTS = InteractionSpec(
     },
 )
 
-
 ANGLE_RESTRAINTS_Z = InteractionSpec(
     n_atoms=2,
     funcs={
-        1: Params(
+        1: ParamSpec(
             names=("theta0", "kc", "mult"),
             parsers=(float, float, int),
             desc="angle restraints z",
