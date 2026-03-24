@@ -51,3 +51,8 @@ top.molecules['SOL'][0].remove_vsites()
 # write topology into a file
 top.write("./examples/topol-processed.top", overwrite=True)
 ```
+
+## Publishing
+GitHub Trusted Publishing is set up via
+[`publish.yml`](.github/workflows/publish.yml). The one-time PyPI and TestPyPI
+configuration steps are documented in [docs/publishing.md](docs/publishing.md).
