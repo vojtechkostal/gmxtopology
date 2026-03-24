@@ -19,8 +19,11 @@ The main flow is organized around a few top-level modules:
 pip install gmxtopology
 ```
 
-This installs `ipykernel` as well, so the environment is ready for Jupyter and
-IPython kernel use.
+For Jupyter/IPython kernel support, install the optional notebook extra:
+
+```bash
+pip install "gmxtopology[notebook]"
+```
 
 From source:
 
