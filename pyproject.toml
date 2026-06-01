@@ -1,26 +1,27 @@
 [project]
 name = "gmxtopology"
-version = "0.1.1"
+version = "0.2.0"
 description = "A Python library for parsing and editing GROMACS topology files."
 authors = [{ name = "Vojtech Kostal", email = "vojtakostal8@gmail.com" }]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["GROMACS", "topology", "molecular dynamics", "simulation"]
-license = { file = "LICENSE" }
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 classifiers = [
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
 ]
 
 [project.optional-dependencies]
 notebook = ["ipykernel"]
+dev = ["build", "pytest", "twine"]
 
 [project.urls]
 Repository = "https://github.com/vojtechkostal/gmxtopology"
 
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

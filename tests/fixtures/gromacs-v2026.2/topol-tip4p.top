@@ -1,0 +1,8 @@
+#include "amber99.ff/forcefield.itp"
+#include "amber99.ff/tip4p.itp"
+
+[ system ]
+Official GROMACS Amber99 TIP4P water fixture
+
+[ molecules ]
+SOL 1

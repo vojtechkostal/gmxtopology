@@ -1,0 +1,7 @@
+include CHANGELOG.md
+recursive-include docs *.md
+include examples/example.ipynb
+include examples/example.top
+prune tests
+prune examples/parameters
+exclude examples/topol*.top

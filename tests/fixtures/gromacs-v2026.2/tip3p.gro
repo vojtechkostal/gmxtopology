@@ -1,0 +1,6 @@
+Official GROMACS Amber99 TIP3P water fixture
+3
+    1SOL     OW    1   1.000   1.000   1.000
+    1SOL    HW1    2   1.096   1.000   1.000
+    1SOL    HW2    3   0.968   1.090   1.000
+   3.00000   3.00000   3.00000

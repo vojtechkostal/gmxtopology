@@ -5,7 +5,6 @@ develop.ipynb
 build/
 dist/
 test/
-tests/
 setup.cfg
 gmxtop/__pycache__/
 gmxtop/gmxtop.egg-info/
@@ -16,3 +15,4 @@ gmxtop/specs/__pycache__/
 examples/.ipynb_checkpoints/
 .vscode/
 .release-venv/
+tests/fixtures/prosECCo75-e4831a4/prosECCo75/

@@ -1,0 +1,77 @@
+name: Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build frontend
+        run: python -m pip install --upgrade build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package metadata
+        run: python -m twine check dist/*
+
+      - name: Check lightweight source distribution
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tarfile import open as open_tar
+
+          archive = next(Path("dist").glob("*.tar.gz"))
+          with open_tar(archive) as tar:
+              names = tar.getnames()
+
+          unexpected = [
+              name
+              for name in names
+              if "/tests/" in name
+              or "/examples/parameters/" in name
+              or "/examples/topol" in name
+          ]
+          if unexpected:
+              raise SystemExit(
+                  "Large development files found in source distribution:\n"
+                  + "\n".join(unexpected)
+              )
+          PY

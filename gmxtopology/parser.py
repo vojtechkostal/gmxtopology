@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Literal, Optional, Tuple
+from typing import Literal
 
 from .interaction_specs import (
     ANGLE_RESTRAINTS,
@@ -48,6 +48,7 @@ from .topology import (
     PairNB,
     PairType,
     PositionRestraint,
+    PreprocessorState,
     Settle,
     System,
     Topology,
@@ -59,9 +60,18 @@ from .topology import (
     _find_atom,
     _find_atomtype,
     _find_molecule_type,
+    _parse_int,
 )
 
 SectionScope = Literal["topology", "molecule"]
+DEFAULT_FUNC_SECTIONS = {
+    "bonds",
+    "pairs",
+    "pairs_nb",
+    "angles",
+    "dihedrals",
+    "constraints",
+}
 
 
 @dataclass(frozen=True)
@@ -71,75 +81,64 @@ class InteractionSection:
     record_type: type
 
 
-def _parse_int(token: str, *, ctx: str) -> int:
-    try:
-        return int(token)
-    except ValueError as exc:
-        raise ValueError(f"Invalid integer value '{token}' in {ctx}.") from exc
-
-
-def _resolve_atomtypes(tokens: List[str], top: Topology) -> list[AtomType]:
-    return [_find_atomtype(top, token) for token in tokens]
-
-
-def _resolve_atoms(tokens: List[str], mol: MoleculeType, ctx: str) -> list[Atom]:
-    return [_find_atom(mol, token, ctx) for token in tokens]
-
-
-def parse_molecule(
-    parts: List[str],
-    top: Topology,
-) -> Tuple[MoleculeType, int]:
-    return _find_molecule_type(top, parts[0]), int(parts[1])
-
-
 def parse_interaction_type(
-    parts: List[str],
+    parts: list[str],
     interaction_spec: InteractionSpec,
-    section_cls: Callable,
+    section_cls: type,
     top: Topology,
     section: str = "",
-    ifdef_state: Optional[str] = None,
+    ifdef_state: PreprocessorState = (),
 ) -> object:
-    n_atom = interaction_spec.n_atoms
-    atomtypes = _resolve_atomtypes(parts[:n_atom], top)
+    n_atoms = interaction_spec.n_atoms
+    ctx = f"section {section} in topology {top.source}"
+    if len(parts) <= n_atoms:
+        raise ValueError(f"Expected atom types and function in {ctx}.")
 
-    func = _parse_int(parts[n_atom], ctx=f"section {section} in topology {top.source}")
-    param_tokens = parts[n_atom + 1:]
-    params = interaction_spec.parse(
-        func,
-        param_tokens,
-        ctx=f"section {section} in topology {top.source}",
-    )
+    atomtypes = [_find_atomtype(top, token) for token in parts[:n_atoms]]
+    func = _parse_int(parts[n_atoms], ctx=ctx)
+    param_tokens = parts[n_atoms + 1:]
     if not param_tokens:
         raise ValueError(
             f"Parameters must be provided for {section} in {top.source} "
             f"with atomtypes ({', '.join(atom.name for atom in atomtypes)})."
         )
 
+    params = interaction_spec.parse(func, param_tokens, ctx=ctx)
     return section_cls(*atomtypes, func, params, ifdef_state=ifdef_state)
 
 
 def parse_interaction(
-    parts: List[str],
+    parts: list[str],
     interaction_spec: InteractionSpec,
-    section_cls: object,
+    section_cls: type,
     top: Topology,
     mol: MoleculeType,
     section: str = "",
-    ifdef_state: Optional[str] = None,
-) -> list[Bond, Pair, Angle, Dihedral, Exclusion]:
+    ifdef_state: PreprocessorState = (),
+) -> list[object]:
     n_atoms = interaction_spec.n_atoms
     ctx = f"section {section} in molecule {mol.name}"
-    atoms = _resolve_atoms(parts[:n_atoms], mol, ctx)
-    func = _parse_int(parts[n_atoms], ctx=ctx)
-    param_tokens = parts[n_atoms + 1:]
+    if len(parts) < n_atoms:
+        raise ValueError(
+            f"Expected at least {n_atoms} atom indices in {ctx}, got {len(parts)}."
+        )
+
+    atoms = [_find_atom(mol, token, ctx) for token in parts[:n_atoms]]
+    if len(parts) == n_atoms and section in DEFAULT_FUNC_SECTIONS:
+        func = 1
+        param_tokens = []
+    else:
+        func = _parse_int(parts[n_atoms], ctx=ctx)
+        param_tokens = parts[n_atoms + 1:]
 
     if not param_tokens:
         if top.defaults.gen_pairs == "yes" and section in {"pairs", "pairs_nb"}:
-            return [section_cls(*atoms, func, {})]
+            return [section_cls(*atoms, func, {}, ifdef_state=ifdef_state)]
         paramtypes = lookup_paramtype(top, *atoms, func=func, section=section)
-        return [section_cls(*atoms, func, item.params) for item in paramtypes]
+        return [
+            section_cls(*atoms, func, item.params, ifdef_state=ifdef_state)
+            for item in paramtypes
+        ]
 
     params = interaction_spec.parse(func, param_tokens, ctx=ctx)
     return [section_cls(*atoms, func, params, ifdef_state=ifdef_state)]
@@ -147,30 +146,14 @@ def parse_interaction(
 
 def apply_section_line(
     section: str,
-    parts: List[str],
+    parts: list[str],
     top: Topology,
-    active_molecule: Optional[MoleculeType],
-    ifdef_state: str = "free",
-) -> Optional[MoleculeType]:
+    active_molecule: MoleculeType | None,
+    ifdef_state: PreprocessorState = (),
+) -> MoleculeType | None:
     """Apply one parsed data line to the topology and return the active molecule."""
 
     section_entry = SECTION_REGISTRY.get(section)
-
-    if section_entry is not None and section_entry.scope == "molecule" and (
-        active_molecule is None
-    ):
-        raise ValueError(
-            f"[ {section} ] section found before molecule type in {top.source}."
-        )
-
-    if section_entry is not None and section_entry.scope == "topology" and (
-        active_molecule is not None
-    ):
-        raise ValueError(
-            f"[ {section} ] section found inside molecule type "
-            f"{active_molecule.name} in {top.source}. "
-            f"Parameter types must be defined globally."
-        )
 
     if section == "defaults":
         top.defaults = Defaults.from_line(parts, top, ifdef_state)
@@ -181,6 +164,12 @@ def apply_section_line(
         return active_molecule
 
     if section_entry is not None and section_entry.scope == "topology":
+        if active_molecule is not None:
+            raise ValueError(
+                f"[ {section} ] section found inside molecule type "
+                f"{active_molecule.name} in {top.source}. "
+                f"Parameter types must be defined globally."
+            )
         interaction_type = parse_interaction_type(
             parts,
             section_entry.spec,
@@ -198,14 +187,20 @@ def apply_section_line(
         return molecule
 
     if section == "atoms":
-        assert active_molecule is not None
+        if active_molecule is None:
+            raise ValueError(
+                f"[ atoms ] section found before molecule type in {top.source}."
+            )
         active_molecule.atoms.append(
             Atom.from_line(parts, top, active_molecule, ifdef_state)
         )
         return active_molecule
 
     if section_entry is not None and section_entry.scope == "molecule":
-        assert active_molecule is not None
+        if active_molecule is None:
+            raise ValueError(
+                f"[ {section} ] section found before molecule type in {top.source}."
+            )
         interactions = parse_interaction(
             parts,
             section_entry.spec,
@@ -219,7 +214,10 @@ def apply_section_line(
         return active_molecule
 
     if section == "exclusions":
-        assert active_molecule is not None
+        if active_molecule is None:
+            raise ValueError(
+                f"[ exclusions ] section found before molecule type in {top.source}."
+            )
         active_molecule.exclusions.append(
             Exclusion.from_line(parts, active_molecule, ifdef_state)
         )
@@ -230,14 +228,15 @@ def apply_section_line(
         return active_molecule
 
     if section == "molecules":
-        molecule, count = parse_molecule(parts, top)
+        molecule = _find_molecule_type(top, parts[0])
+        count = _parse_int(parts[1], ctx=f"[ molecules ] in {top.source}")
         top.molecules[molecule.name] = (molecule, count)
         return active_molecule
 
     return active_molecule
 
 
-SECTION_REGISTRY: Dict[str, InteractionSection] = {
+SECTION_REGISTRY: dict[str, InteractionSection] = {
     "bondtypes": InteractionSection("topology", BONDS, BondType),
     "pairtypes": InteractionSection("topology", PAIRS, PairType),
     "angletypes": InteractionSection("topology", ANGLES, AngleType),
@@ -323,4 +322,8 @@ SECTION_REGISTRY: Dict[str, InteractionSection] = {
 
 MOLECULE_SECTIONS: tuple[str, ...] = tuple(
     name for name, entry in SECTION_REGISTRY.items() if entry.scope == "molecule"
+)
+
+TOPOLOGY_SECTIONS: tuple[str, ...] = tuple(
+    name for name, entry in SECTION_REGISTRY.items() if entry.scope == "topology"
 )

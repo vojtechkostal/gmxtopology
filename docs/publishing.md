@@ -56,10 +56,26 @@ Either:
 - Run the same workflow manually and choose `repository=pypi`, or
 - Create a GitHub release, which triggers the PyPI publish job automatically.
 
-## Recommended first release flow
+## Release flow
 
-1. Register the pending publisher on TestPyPI.
-2. Run the workflow manually with `repository=testpypi`.
-3. Verify installation from TestPyPI.
-4. Register the pending publisher on PyPI.
-5. Publish to PyPI manually or by creating a GitHub release.
+1. Prepare the version bump and changelog on a feature branch.
+2. Run `python -m pytest`.
+3. Run `python -m build` and `python -m twine check dist/*`.
+4. Open a pull request and merge it after the `Checks` workflow passes.
+5. Tag the release commit on `main`, for example:
+
+   ```bash
+   git switch main
+   git pull --ff-only
+   git tag -a v0.2.0 -m "gmxtopology 0.2.0"
+   git push origin v0.2.0
+   ```
+
+6. Run the `Publish Python Package` workflow manually with
+   `repository=testpypi`.
+7. Verify installation from TestPyPI in a clean environment.
+8. Create a GitHub release from the tag. Publishing that release triggers the
+   production PyPI job automatically.
+
+For the first release only, register the pending publishers and GitHub
+environments described above before running the workflow.
