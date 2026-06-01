@@ -1,0 +1,20 @@
+#include "top/charmm36s-feb2021-prosECCo75.ff/forcefield.itp"
+
+[ moleculetype ]
+CMAP 3
+
+[ atoms ]
+1 C   1 CMAP C1  1 0.0 12.011
+2 NH1 1 CMAP N1  1 0.0 14.007
+3 CT1 1 CMAP CT1 1 0.0 12.011
+4 C   1 CMAP C2  1 0.0 12.011
+5 NH1 1 CMAP N2  1 0.0 14.007
+
+[ cmap ]
+1 2 3 4 5 1
+
+[ system ]
+prosECCo75 CMAP fixture
+
+[ molecules ]
+CMAP 1

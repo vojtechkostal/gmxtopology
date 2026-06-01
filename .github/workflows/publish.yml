@@ -30,10 +30,37 @@ jobs:
           python-version: "3.12"
 
       - name: Install build backend
-        run: python -m pip install --upgrade build
+        run: python -m pip install --upgrade build twine
 
       - name: Build package
         run: python -m build
+
+      - name: Check package metadata
+        run: python -m twine check dist/*
+
+      - name: Check lightweight source distribution
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tarfile import open as open_tar
+
+          archive = next(Path("dist").glob("*.tar.gz"))
+          with open_tar(archive) as tar:
+              names = tar.getnames()
+
+          unexpected = [
+              name
+              for name in names
+              if "/tests/" in name
+              or "/examples/parameters/" in name
+              or "/examples/topol" in name
+          ]
+          if unexpected:
+              raise SystemExit(
+                  "Large development files found in source distribution:\n"
+                  + "\n".join(unexpected)
+              )
+          PY
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4

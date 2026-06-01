@@ -1,5 +1,5 @@
-from dataclasses import replace
-from typing import List, Literal, Mapping, Tuple
+from dataclasses import dataclass, replace
+from typing import Literal, Mapping
 
 from .topology import (
     AngleType,
@@ -12,217 +12,225 @@ from .topology import (
     Topology,
 )
 
+ATOM_FIELDS = ("ai", "aj", "ak", "al")
+PARAMTYPE_SECTIONS = {
+    "bonds": ("bond", "bondtypes"),
+    "pairs": ("pair", "pairtypes"),
+    "pairs_nb": ("pair", "pairtypes"),
+    "angles": ("angle", "angletypes"),
+    "constraints": ("constraint", "constrainttypes"),
+}
+ParamType = BondType | PairType | AngleType | DihedralType | ConstraintType
 
-def _match_wildcard(pattern: List[str], target: List[str]) -> bool:
-    """Check if target matches pattern with 'X' wildcards."""
-    return all(p == "X" or p == t for p, t in zip(pattern, target))
+
+@dataclass
+class ParamTypeIndex:
+    size: int
+    exact: dict[tuple[int, tuple[str, ...]], list[ParamType]]
+    wildcards: dict[int, list[DihedralType]]
 
 
-def is_exact(dt_names: List[str], at_forward: List[str], at_reverse: List[str]) -> bool:
-    """Check for exact match of atom type names."""
-    return dt_names == at_forward or dt_names == at_reverse
-
-
-def is_wild(dt_names: List[str], at_forward: List[str], at_reverse: List[str]) -> bool:
-    """Check for wildcard match of atom type names."""
-    return _match_wildcard(dt_names, at_forward) or _match_wildcard(
-        dt_names,
-        at_reverse,
+def _atomtype_names(paramtype: ParamType, n_atoms: int) -> tuple[str, ...]:
+    return tuple(
+        getattr(paramtype, field).name
+        for field in ATOM_FIELDS[:n_atoms]
     )
 
 
-def specificity(dt_names: List[str]) -> int:
-    """Calculate specificity of a dihedral type based on non-wildcard entries."""
-    return sum(name != "X" for name in dt_names)
+def _canonical_atomtypes(names: tuple[str, ...]) -> tuple[str, ...]:
+    reverse = tuple(reversed(names))
+    return min(names, reverse)
 
 
-Collection = (
-    List[BondType]
-    | List[PairType]
-    | List[AngleType]
-    | List[DihedralType]
-    | List[ConstraintType]
-)
+def _matches_wildcard(pattern: tuple[str, ...], target: tuple[str, ...]) -> bool:
+    return all(
+        expected == "X" or expected == actual
+        for expected, actual in zip(pattern, target)
+    )
+
+
+def _paramtype_index(
+    top: Topology,
+    collection_name: str,
+    n_atoms: int,
+) -> ParamTypeIndex:
+    collection = getattr(top, collection_name)
+    indexes = getattr(top, "_paramtype_indexes", {})
+    cached = indexes.get(collection_name)
+    if cached is not None and cached.size == len(collection):
+        return cached
+
+    exact = {}
+    wildcards = {}
+    for paramtype in collection:
+        names = _atomtype_names(paramtype, n_atoms)
+        if "X" in names:
+            wildcards.setdefault(paramtype.func, []).append(paramtype)
+        else:
+            key = paramtype.func, _canonical_atomtypes(names)
+            exact.setdefault(key, []).append(paramtype)
+
+    cached = ParamTypeIndex(
+        size=len(collection),
+        exact=exact,
+        wildcards=wildcards,
+    )
+    indexes[collection_name] = cached
+    top._paramtype_indexes = indexes
+    return cached
+
+
+def _lookup_dihedraltypes(
+    top: Topology,
+    at_forward: tuple[str, ...],
+    func: int,
+) -> list[DihedralType]:
+    index = _paramtype_index(top, "dihedraltypes", 4)
+    exact_matches = index.exact.get((func, _canonical_atomtypes(at_forward)), [])
+    wildcard_matches = []
+    best_specificity = -1
+    at_reverse = tuple(reversed(at_forward))
+
+    for dihedraltype in index.wildcards.get(func, []):
+        type_names = _atomtype_names(dihedraltype, 4)
+        if not _matches_wildcard(type_names, at_forward):
+            if not _matches_wildcard(type_names, at_reverse):
+                continue
+
+        matched_specificity = sum(name != "X" for name in type_names)
+        if matched_specificity > best_specificity:
+            wildcard_matches = [dihedraltype]
+            best_specificity = matched_specificity
+        elif matched_specificity == best_specificity:
+            wildcard_matches.append(dihedraltype)
+
+    matched_types = exact_matches or wildcard_matches
+    unique_types = []
+    seen_multiplicities = set()
+    for dihedraltype in matched_types:
+        multiplicity = dihedraltype.params.get("mult")
+        if multiplicity is not None and multiplicity in seen_multiplicities:
+            continue
+        if multiplicity is not None:
+            seen_multiplicities.add(multiplicity)
+        unique_types.append(dihedraltype)
+    return unique_types
+
+
+InteractionSection = Literal[
+    "bonds",
+    "pairs",
+    "pairs_nb",
+    "angles",
+    "dihedrals",
+    "constraints",
+]
 
 
 def lookup_paramtype(
     top: Topology,
     *atoms: Atom,
     func: int,
-    section: Literal[
-        "bonds",
-        "pairs",
-        "pairs_nb",
-        "angles",
-        "dihedrals",
-        "constraints",
-    ],
-) -> List[Collection]:
-    """Lookup the parameter type(s) for the given atoms in the topology."""
+    section: InteractionSection,
+) -> list[ParamType]:
+    """Look up global parameters for a molecular interaction."""
 
-    at_forward = [a.type.name if isinstance(a, Atom) else a for a in atoms]
-    at_reverse = list(reversed(at_forward))
-    matched_types = None
-    if len(atoms) == 2:
-        if section in {"pairs", "pairs_nb"}:
-            name = "pair"
-            for pairtype in top.pairtypes:
-                type_names = [pairtype.ai.name, pairtype.aj.name]
-                if type_names == at_forward or type_names == at_reverse:
-                    matched_types = pairtype
-                    break
-        elif section == "constraints":
-            name = "constraint"
-            for constrainttype in top.constrainttypes:
-                type_names = [constrainttype.ai.name, constrainttype.aj.name]
-                if constrainttype.func != func:
-                    continue
-                if type_names == at_forward or type_names == at_reverse:
-                    matched_types = constrainttype
-                    break
-        else:
-            name = "bond"
-            for bondtype in top.bondtypes:
-                type_names = [bondtype.ai.name, bondtype.aj.name]
-                if bondtype.func != func:
-                    continue
-                if type_names == at_forward or type_names == at_reverse:
-                    matched_types = bondtype
-                    break
-    elif len(atoms) == 3:
-        name = "angle"
-        for angletype in top.angletypes:
-            type_names = [angletype.ai.name, angletype.aj.name, angletype.ak.name]
-            if angletype.func != func:
-                continue
-            if type_names == at_forward or type_names == at_reverse:
-                matched_types = angletype
-                break
-    elif len(atoms) == 4:
+    at_forward = tuple(atom.type.name for atom in atoms)
+
+    if section == "dihedrals":
         name = "dihedral"
-        candidates = [item for item in top.dihedraltypes if item.func == func]
-
-        exact_matches = []
-        wildcard_matches = []
-        best_specificity = -1
-
-        for dihedraltype in candidates:
-            type_names = [
-                dihedraltype.ai.name,
-                dihedraltype.aj.name,
-                dihedraltype.ak.name,
-                dihedraltype.al.name,
-            ]
-
-            if is_exact(type_names, at_forward, at_reverse):
-                exact_matches.append(dihedraltype)
-                continue
-
-            if is_wild(type_names, at_forward, at_reverse):
-                matched_specificity = specificity(type_names)
-                if matched_specificity > best_specificity:
-                    wildcard_matches = [dihedraltype]
-                    best_specificity = matched_specificity
-                elif matched_specificity == best_specificity:
-                    wildcard_matches.append(dihedraltype)
-
-        picked = exact_matches if exact_matches else wildcard_matches
-
-        seen_mult: set[int] = set()
-        best: list[DihedralType] = []
-        for dihedraltype in picked:
-            mult = dihedraltype.params.get("mult")
-            if mult is None:
-                best.append(dihedraltype)
-                continue
-            if mult in seen_mult:
-                continue
-            seen_mult.add(mult)
-            best.append(dihedraltype)
-
-        matched_types = best
+        matched_types = _lookup_dihedraltypes(top, at_forward, func)
     else:
-        raise ValueError(f"Unsupported interaction size {len(atoms)} in {section}.")
+        try:
+            name, collection_name = PARAMTYPE_SECTIONS[section]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unsupported interaction size {len(atoms)} in {section}."
+            ) from exc
+
+        index = _paramtype_index(top, collection_name, len(atoms))
+        matched_types = index.exact.get(
+            (func, _canonical_atomtypes(at_forward)),
+            [],
+        )[:1]
 
     if not matched_types:
         raise ValueError(
             f"No {name} found for atoms {' '.join(at_forward)} "
             f"with function {func}."
         )
-
-    if not isinstance(matched_types, list):
-        matched_types = [matched_types]
-
     return matched_types
 
 
-def reduce_atoms(mol: MoleculeType) -> Tuple[List[Atom], Mapping[int, Atom]]:
+def reduce_atoms(mol: MoleculeType) -> tuple[list[Atom], Mapping[int, Atom]]:
     """Remove virtual site atoms from the molecule and update all references."""
     new_atoms = []
     old2new = {}
     indices = {
         vsite.ai.nr
-        for section in mol._vsite_sections.values()
-        for vsite in section
+        for section in mol.VSITE_SECTIONS
+        for vsite in getattr(mol, section)
     }
 
     for atom in mol.atoms:
         if atom.nr in indices:
             continue
-        new_nr = len(new_atoms) + 1
-        new_atom = replace(atom, nr=new_nr)
+        new_atom = replace(atom, nr=len(new_atoms) + 1)
         new_atoms.append(new_atom)
         old2new[atom.nr] = new_atom
 
     return new_atoms, old2new
 
 
-def reduce_bonded(
+def reduce_connections(
     mol: MoleculeType,
     old2new: Mapping[int, Atom],
-) -> Mapping[str, List]:
+) -> dict[str, list]:
     """Update all connection references in the molecule based on old2new mapping."""
     new_sections = {}
-    for section in mol._connection_sections:
-        new_list = []
+    for section in mol.CONNECTION_SECTIONS:
+        new_items = []
         for item in getattr(mol, section):
-            old_ids = [
-                getattr(item, attr).nr
-                for attr in ("ai", "aj", "ak", "al")
-                if hasattr(item, attr)
-            ]
-            kept_atoms = [old2new[index] for index in old_ids if index in old2new]
-            if len(kept_atoms) == len(old_ids):
-                for attr, atom in zip(("ai", "aj", "ak", "al"), kept_atoms):
-                    if hasattr(item, attr):
-                        item = replace(item, **{attr: atom})
-                new_list.append(item)
-        new_sections[section] = new_list
+            atom_fields = [field for field in ATOM_FIELDS if hasattr(item, field)]
+            atoms = {
+                field: old2new[getattr(item, field).nr]
+                for field in atom_fields
+                if getattr(item, field).nr in old2new
+            }
+            if len(atoms) == len(atom_fields):
+                new_items.append(replace(item, **atoms))
+        new_sections[section] = new_items
 
     return new_sections
 
 
-def reduce_exclusions(mol: MoleculeType, old2new: Mapping[int, Atom]) -> List:
+def reduce_exclusions(
+    mol: MoleculeType,
+    old2new: Mapping[int, Atom],
+) -> list:
     """Update exclusions in the molecule based on old2new mapping."""
     new_exclusions = []
     for exclusion in mol.exclusions:
-        old_ids = [atom.nr for atom in exclusion.excluded]
-        kept_atoms = [old2new[index] for index in old_ids if index in old2new]
+        kept_atoms = [
+            old2new[atom.nr]
+            for atom in exclusion.excluded
+            if atom.nr in old2new
+        ]
         if len(kept_atoms) >= 2:
-            new_exclusions.append(replace(exclusion, excluded=tuple(kept_atoms)))
+            new_exclusions.append(replace(exclusion, excluded=kept_atoms))
     return new_exclusions
 
 
 def remove_vsites(mol: MoleculeType) -> None:
     """Remove virtual site atoms from the molecule and update all references."""
     new_atoms, old2new = reduce_atoms(mol)
-    new_bonded = reduce_bonded(mol, old2new)
+    new_connections = reduce_connections(mol, old2new)
     new_exclusions = reduce_exclusions(mol, old2new)
 
     mol.atoms = new_atoms
-    for field_name, new_list in new_bonded.items():
+    for field_name, new_list in new_connections.items():
         setattr(mol, field_name, new_list)
     mol.exclusions = new_exclusions
 
-    for vsite_kind in mol._vsite_sections:
+    for vsite_kind in mol.VSITE_SECTIONS:
         setattr(mol, vsite_kind, [])

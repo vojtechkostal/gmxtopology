@@ -1,0 +1,8 @@
+#include "top/charmm36s-feb2021-prosECCo75.ff/forcefield.itp"
+#include "top/lipids/PC/POPC_s.itp"
+
+[ system ]
+prosECCo75 POPC fixture
+
+[ molecules ]
+POPC_s 1

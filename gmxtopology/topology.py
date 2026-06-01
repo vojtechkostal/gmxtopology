@@ -17,8 +17,9 @@ from typing import (
     get_args,
     Union,
     Tuple,
-    Set
 )
+
+PreprocessorState = tuple[str, ...]
 
 
 def _parse_int(token: str, *, ctx: str) -> int:
@@ -72,16 +73,23 @@ def _find_atomtype(top: Topology, name: str) -> AtomType:
             epsilon=0.0,
         )
 
-    for atomtype in top.atomtypes:
-        if atomtype.name == name:
-            return atomtype
+    cached = getattr(top, "_atomtype_index", None)
+    if cached is None or cached[0] != len(top.atomtypes):
+        atomtypes = {}
+        for atomtype in top.atomtypes:
+            atomtypes.setdefault(atomtype.name, atomtype)
+        cached = len(top.atomtypes), atomtypes
+        top._atomtype_index = cached
 
-    raise ValueError(f"Atomtype {name} not found in {top.source}.")
+    try:
+        return cached[1][name]
+    except KeyError as exc:
+        raise ValueError(f"Atomtype {name} not found in {top.source}.") from exc
 
 
 def _find_molecule_type(top: Topology, name: str) -> MoleculeType:
     for moleculetype in top.moleculetypes:
-        if moleculetype.name == name:
+        if moleculetype.name.casefold() == name.casefold():
             return moleculetype
 
     raise ValueError(
@@ -116,21 +124,14 @@ class RenderableSection:
         """Section header string."""
         return f"[ {self.SECTION} ]"
 
-    def _field_type(self, annotation: Any) -> Optional[type]:
-        if annotation in {float, int, str}:
-            return annotation
-
+    @staticmethod
+    def _unwrap_optional(annotation: Any) -> Any:
         origin = get_origin(annotation)
-        if origin not in (types.UnionType, Union):
-            return None
-
-        inner_types = [
-            arg for arg in get_args(annotation)
-            if isinstance(arg, type) and arg is not type(None)
-        ]
-        if len(inner_types) == 1 and inner_types[0] in {float, int, str}:
-            return inner_types[0]
-        return None
+        if origin in (types.UnionType, Union):
+            inner_types = [arg for arg in get_args(annotation) if arg is not type(None)]
+            if len(inner_types) == 1:
+                return inner_types[0]
+        return annotation
 
     def _render_value(
         self,
@@ -138,14 +139,14 @@ class RenderableSection:
         annotation: Any,
         value: Any,
     ) -> Optional[tuple[Any, type]]:
-        scalar_type = self._field_type(annotation)
-        if scalar_type is not None:
-            return value, scalar_type
+        field_type = self._unwrap_optional(annotation)
+        if field_type in {float, int, str}:
+            return value, field_type
 
-        if annotation in {AtomType, MoleculeType}:
+        if field_type in {AtomType, MoleculeType}:
             return value.name, str
 
-        if annotation == Atom:
+        if field_type == Atom:
             return value.nr, int
 
         if field_name == "excluded":
@@ -180,58 +181,42 @@ class RenderableSection:
 
         return out
 
-    def _fmt(self, name, type_: type) -> int:
+    def _fmt(self, name: str, type_: type) -> str:
         """Determine format string for a given parameter based on its name and type."""
         if type_ == float:
-            width = self.W_FLOAT
             if name == "charge":
                 decimals = self.D_CHARGE
             elif name in ("sigma", "epsilon"):
                 decimals = self.D_LJ
             else:
                 decimals = self.D
-
-            fmt = f'>{width}.{decimals}f'
-        else:
-            width = self.W
-            fmt = f'>{width}'
-
-        return fmt
+            return f'>{self.W_FLOAT}.{decimals}f'
+        return f'>{self.W}'
 
     def _render(self, *, values: bool) -> str:
         """Render either the legend (parameter names) or values."""
 
         chunks: list[str] = []
-        for i, (key, (val, typ)) in enumerate(self.args.items()):
+        for i, (name, (value, type_)) in enumerate(self.args.items()):
             if i == 0:
                 if values:
-                    chunks.append(f"{val:>{self.W_FIRST}}")
+                    chunks.append(f"{value:>{self.W_FIRST}}")
                 else:
-                    chunks.append(f"; {key:>{self.W_FIRST - 2}}")
+                    chunks.append(f"; {name:>{self.W_FIRST - 2}}")
                 continue
 
-            fmt = self._fmt(key, typ)
+            fmt = self._fmt(name, type_)
             if values:
                 try:
-                    chunks.append(f"{val:{fmt}}")
+                    chunks.append(f"{value:{fmt}}")
                 except ValueError:
                     # Fallback for non-numeric values
-                    chunks.append(f"{str(val):>{self.W}}")
+                    chunks.append(f" {str(value):>{self.W}}")
             else:
                 fmt = fmt.split('.')[0]  # remove decimal part for legend
-                chunks.append(f"{key:{fmt}}")
+                chunks.append(f"{name:{fmt}}")
 
         return "".join(chunks)
-
-    @property
-    def ifdef(self) -> Optional[str]:
-        """Return the ifdef directive string for this section."""
-        if self.ifdef_state:
-            if "ifdef" in self.ifdef_state:
-                return f"#{self.ifdef_state}"
-            elif "else" in self.ifdef_state:
-                return "#else"
-        return self.ifdef_state
 
     @property
     def legend(self) -> str:
@@ -279,7 +264,7 @@ class Defaults(RenderableSection):
     fudgeLJ: float
     fudgeQQ: float
     n: Optional[int] = None
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'defaults'
 
@@ -288,7 +273,7 @@ class Defaults(RenderableSection):
         cls,
         parts: list[str],
         top: Topology,
-        ifdef_state: Optional[str] = None,
+        ifdef_state: PreprocessorState = (),
     ) -> Defaults:
         ctx = f"[ defaults ] in {top.source}"
         if top.defaults is not None:
@@ -331,16 +316,27 @@ class Defaults(RenderableSection):
 class Define(UpdatableSection):
     directive: str
     argument: Optional[str | int | float]
+    ifdef_state: PreprocessorState = ()
 
     MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset({"argument"})
-
-    def __hash__(self):
-        return hash(self.directive)
 
     def __str__(self) -> str:
         if self.argument is not None:
             return f"#define {self.directive} {self.argument}"
         return f"#define {self.directive}"
+
+
+@dataclass(slots=True)
+class RawSection:
+    """Topology section preserved without modeling its contents."""
+
+    name: str
+    lines: List[str] = field(default_factory=list)
+    ifdef_state: PreprocessorState = ()
+
+    @property
+    def header(self) -> str:
+        return f"[ {self.name} ]"
 
 
 @dataclass(slots=True)
@@ -353,7 +349,7 @@ class AtomType(UpdatableSection):
     ptype: str
     sigma: float
     epsilon: float
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset({"sigma", "epsilon"})
     SECTION = 'atomtypes'
@@ -366,7 +362,7 @@ class AtomType(UpdatableSection):
         cls,
         parts: list[str],
         top: Topology,
-        ifdef_state: Optional[str] = None,
+        ifdef_state: PreprocessorState = (),
     ) -> AtomType:
         ctx = f"[ atomtypes ] in {top.source}"
         if len(parts) not in {6, 7, 8}:
@@ -421,7 +417,7 @@ class BondType(UpdatableSection):
     aj: AtomType
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'bondtypes'
 
@@ -432,7 +428,7 @@ class PairType(UpdatableSection):
     aj: AtomType
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'pairtypes'
 
@@ -444,7 +440,7 @@ class AngleType(UpdatableSection):
     ak: AtomType
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'angletypes'
 
@@ -457,7 +453,7 @@ class DihedralType(UpdatableSection):
     al: AtomType
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'dihedraltypes'
 
@@ -468,7 +464,7 @@ class ConstraintType(UpdatableSection):
     aj: AtomType
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'constrainttypes'
 
@@ -479,7 +475,7 @@ class Constraint(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'constraints'
 
@@ -490,7 +486,7 @@ class NonBondParam(UpdatableSection):
     aj: AtomType
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'nonbond_params'
 
@@ -507,11 +503,14 @@ class Atom(UpdatableSection):
     name: str
     cgnr: int
     charge: float
-    mass: float
-    ifdef_state: Optional[str] = "free"
+    mass: Optional[float]
+    type_b: Optional[AtomType] = None
+    charge_b: Optional[float] = None
+    mass_b: Optional[float] = None
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'atoms'
-    MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset({"charge"})
+    MODIFIABLE: ClassVar[FrozenSet[str]] = frozenset({"charge", "charge_b"})
 
     @classmethod
     def from_line(
@@ -519,21 +518,26 @@ class Atom(UpdatableSection):
         parts: list[str],
         top: Topology,
         mol: MoleculeType,
-        ifdef_state: Optional[str] = None,
+        ifdef_state: PreprocessorState = (),
     ) -> Atom:
         ctx = f"[ atoms ] in {top.source}"
-        if len(parts) != 8:
+        if len(parts) not in {7, 8, 10, 11}:
             raise NotImplementedError(
-                f"{ctx} currently supports exactly 8 values per atom line; "
+                f"{ctx} expects 7 values, an optional mass, and optionally "
+                "the three topology-B values; "
                 f"got {len(parts)}."
             )
 
         nr = _parse_int(parts[0], ctx=ctx)
-        if mol.get_atom_by_idx(nr) is not None and ifdef_state == "free":
+        if mol.get_atom_by_idx(nr) is not None and not ifdef_state:
             raise ValueError(
                 f"Duplicate atom index '{nr}' in molecule '{mol.name}' "
                 f"in topology {top.source}"
             )
+
+        has_mass = len(parts) in {8, 11}
+        has_b_state = len(parts) in {10, 11}
+        b_state_idx = 8 if has_mass else 7
 
         return cls(
             nr=nr,
@@ -543,7 +547,26 @@ class Atom(UpdatableSection):
             name=parts[4],
             cgnr=_parse_int(parts[5], ctx=ctx),
             charge=_parse_define_or_float(parts[6], top, ctx=ctx),
-            mass=_parse_define_or_float(parts[7], top, ctx=ctx),
+            mass=(
+                _parse_define_or_float(parts[7], top, ctx=ctx)
+                if has_mass
+                else None
+            ),
+            type_b=(
+                _find_atomtype(top, parts[b_state_idx])
+                if has_b_state
+                else None
+            ),
+            charge_b=(
+                _parse_define_or_float(parts[b_state_idx + 1], top, ctx=ctx)
+                if has_b_state
+                else None
+            ),
+            mass_b=(
+                _parse_define_or_float(parts[b_state_idx + 2], top, ctx=ctx)
+                if has_b_state
+                else None
+            ),
             ifdef_state=ifdef_state,
         )
 
@@ -554,7 +577,7 @@ class Bond(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'bonds'
 
@@ -565,7 +588,7 @@ class Pair(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'pairs'
 
@@ -576,7 +599,7 @@ class PairNB(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'pairs_nb'
 
@@ -588,7 +611,7 @@ class Angle(UpdatableSection):
     ak: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'angles'
 
@@ -601,7 +624,7 @@ class Dihedral(UpdatableSection):
     al: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'dihedrals'
 
@@ -615,7 +638,7 @@ class Dihedral(UpdatableSection):
 @dataclass(slots=True)
 class Exclusion(RenderableSection):
     excluded: List[Atom]  # variable length per line
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'exclusions'
 
@@ -624,7 +647,7 @@ class Exclusion(RenderableSection):
         cls,
         parts: list[str],
         mol: MoleculeType,
-        ifdef_state: Optional[str] = None,
+        ifdef_state: PreprocessorState = (),
     ) -> Exclusion:
         excluded = [_find_atom(mol, token, "exclusions") for token in parts]
         return cls(excluded, ifdef_state=ifdef_state)
@@ -635,7 +658,7 @@ class Settle(UpdatableSection):
     ai: Atom
     func: int
     params: Dict[str, float] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'settles'
 
@@ -646,7 +669,7 @@ class VirtualSite1(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'virtual_sites1'
 
@@ -658,7 +681,7 @@ class VirtualSite2(UpdatableSection):
     ak: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'virtual_sites2'
 
@@ -671,7 +694,7 @@ class VirtualSite3(UpdatableSection):
     al: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'virtual_sites3'
 
@@ -685,7 +708,7 @@ class VirtualSite4(UpdatableSection):
     am: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'virtual_sites4'
 
@@ -695,7 +718,7 @@ class VirtualSiteN(UpdatableSection):
     ai: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'virtual_sitesn'
 
@@ -705,7 +728,7 @@ class PositionRestraint(UpdatableSection):
     ai: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'position_restraints'
 
@@ -716,7 +739,7 @@ class DistanceRestraint(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'distance_restraints'
 
@@ -729,7 +752,7 @@ class DihedralRestraint(UpdatableSection):
     al: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'dihedral_restraints'
 
@@ -740,7 +763,7 @@ class OrientationRestraint(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'orientation_restraints'
 
@@ -753,7 +776,7 @@ class AngleRestraint(UpdatableSection):
     al: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'angle_restraints'
 
@@ -764,7 +787,7 @@ class AngleRestraintZ(UpdatableSection):
     aj: Atom
     func: int
     params: Mapping[str, float | int | str] = field(default_factory=dict)
-    ifdef_state: Optional[str] = "free"
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'angle_restraints_z'
 
@@ -807,16 +830,37 @@ class MoleculeType(RenderableSection):
     orientation_restraints: List[OrientationRestraint] = field(default_factory=list)
     angle_restraints: List[AngleRestraint] = field(default_factory=list)
     angle_restraints_z: List[AngleRestraintZ] = field(default_factory=list)
-    ifdef_state: Optional[str] = "free"
+    raw_sections: List[RawSection] = field(default_factory=list)
+    ifdef_state: PreprocessorState = ()
 
     SECTION = 'moleculetype'
+    VSITE_SECTIONS = (
+        "virtual_sites1",
+        "virtual_sites2",
+        "virtual_sites3",
+        "virtual_sites4",
+        "virtual_sitesn",
+    )
+    CONNECTION_SECTIONS = (
+        "bonds",
+        "pairs",
+        "angles",
+        "dihedrals",
+        "constraints",
+        "position_restraints",
+        "distance_restraints",
+        "dihedral_restraints",
+        "orientation_restraints",
+        "angle_restraints",
+        "angle_restraints_z",
+    )
 
     @classmethod
     def from_line(
         cls,
         parts: list[str],
         top: Topology,
-        ifdef_state: Optional[str] = None,
+        ifdef_state: PreprocessorState = (),
     ) -> MoleculeType:
         molecule = cls(
             name=parts[0],
@@ -825,7 +869,7 @@ class MoleculeType(RenderableSection):
         )
         _ensure_unique(
             top.moleculetypes,
-            lambda item: item.name == molecule.name
+            lambda item: item.name.casefold() == molecule.name.casefold()
             and item.ifdef_state == molecule.ifdef_state,
             f"Duplicate moleculetype '{molecule.name}' found in topology "
             f"{top.source}.",
@@ -837,23 +881,6 @@ class MoleculeType(RenderableSection):
             if atom.nr == idx:
                 return atom
         return None
-
-    @property
-    def _vsite_sections(self):
-        return {
-            attr: getattr(self, attr)
-            for attr in self.__dataclass_fields__
-            if attr.startswith("virtual_sites")
-        }
-
-    @property
-    def _connection_sections(self):
-        return {
-            "bonds", "pairs", "angles", "dihedrals", "constraints",
-            "position_restraints", "distance_restraints",
-            "dihedral_restraints", "orientation_restraints",
-            "angle_restraints", "angle_restraints_z"
-        }
 
     def remove_vsites(self) -> None:
         from .lookup import remove_vsites
@@ -875,12 +902,24 @@ class Topology:
     angletypes: List[AngleType] = field(default_factory=list)
     dihedraltypes: List[DihedralType] = field(default_factory=list)
     constrainttypes: List[ConstraintType] = field(default_factory=list)
+    raw_sections: List[RawSection] = field(default_factory=list)
     moleculetypes: List[MoleculeType] = field(default_factory=list)
 
     system: Optional[System] = None
     molecules: Dict[str, Tuple[MoleculeType, int]] = field(default_factory=dict)
 
-    defines: Set[Define] = field(default_factory=set)
+    defines: List[Define] = field(default_factory=list)
+
+    _atomtype_index: Optional[Tuple[int, Dict[str, AtomType]]] = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _paramtype_indexes: Dict[str, Any] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     @property
     def residues(self) -> List[MoleculeType]:
@@ -890,7 +929,12 @@ class Topology:
     @property
     def atoms(self) -> List[Atom]:
         """List of all atoms in the topology."""
-        return [atom for mol in self.residues for atom in mol.atoms]
+        return [
+            atom
+            for mol, count in self.molecules.values()
+            for _ in range(count)
+            for atom in mol.atoms
+        ]
 
     def __post_init__(self) -> None:
         self.source = Path(self.source).resolve()

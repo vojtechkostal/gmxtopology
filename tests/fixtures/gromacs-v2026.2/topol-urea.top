@@ -1,0 +1,8 @@
+#include "amber99.ff/forcefield.itp"
+#include "amber99.ff/urea.itp"
+
+[ system ]
+Official GROMACS Amber99 urea fixture
+
+[ molecules ]
+URE 1

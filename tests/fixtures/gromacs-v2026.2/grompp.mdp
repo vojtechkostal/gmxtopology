@@ -1,0 +1,9 @@
+integrator = md
+nsteps = 0
+continuation = yes
+cutoff-scheme = Verlet
+coulombtype = Cut-off
+vdwtype = Cut-off
+rlist = 1.0
+rcoulomb = 1.0
+rvdw = 1.0
