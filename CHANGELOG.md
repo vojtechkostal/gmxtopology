@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.0
+
+Breaking release: the reader, data model and writer were rewritten as a linear
+pipeline (preprocess, parse, resolve, write).
+
+### Migration
+
+- `top.molecules` is now an ordered list of `(MoleculeType, count)`; repeated
+  molecule names are kept. Look up a molecule type with
+  `top.moleculetype("NAME")`.
+- Conditional blocks are evaluated: pass `defines={"NAME": None}` to
+  `Topology`. The `ifdef_state` of records and the round-tripping of
+  `#ifdef` blocks are gone.
+- The per-directive record classes (`Bond`, `Angle`, ...) are replaced by
+  `Interaction`; parameter tables hold `TypeEntry` records. Atoms and
+  interactions refer to atom types by name and to atoms by number, e.g.
+  `atom.type` is a string and `bond.atoms == (1, 2)`.
+- `molecule.remove_vsites()` is now `drop_vsites(molecule)`.
+- `RawSection` and `raw_sections` are gone: CMAP is parsed and unknown
+  directives are errors.
+
+### Fixes
+
+- Bonded parameters are matched on bonded atom types (OPLS-AA, GROMOS).
+- Explicit `[ pairtypes ]` are used even with `gen-pairs = yes`.
+- Repeated molecule names in `[ molecules ]` are kept in order.
+- Residue names are written as read.
+- Only the CMAP grids that are used are written, and `[ cmap ]` entries are
+  renumbered when virtual sites are removed.
+- `[ dihedraltypes ]`: two-type form, GROMACS wildcard matching, and adjacent
+  type-9 terms with equal multiplicity.
+- Parameters are written with full precision.
+- Includes are found through `$GMXLIB` and the GROMACS data directory; errors
+  report file and line; `#undef`, line continuation, `[ intermolecular_interactions ]`
+  and bonds without parameters are supported.
+- Fourier dihedrals (type 5) take four parameters.
+
 ## 0.2.0
 
 ### Highlights

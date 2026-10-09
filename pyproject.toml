@@ -1,6 +1,6 @@
 [project]
 name = "gmxtopology"
-version = "0.2.0"
+version = "0.3.0"
 description = "A Python library for parsing and editing GROMACS topology files."
 authors = [{ name = "Vojtech Kostal", email = "vojtakostal8@gmail.com" }]
 readme = "README.md"

@@ -1,12 +1,27 @@
-from . import interaction_specs, io, lookup, parser, schema
-from .topology import Topology, MoleculeType
+from .model import (
+    Atom,
+    AtomType,
+    CmapType,
+    Defaults,
+    Interaction,
+    MoleculeType,
+    Topology,
+    TypeEntry,
+)
+from .preprocess import Define, TopologyError
+from .reduce import drop_vsites, virtual_site_numbers
 
 __all__ = [
-    "Topology",
+    "Atom",
+    "AtomType",
+    "CmapType",
+    "Defaults",
+    "Define",
+    "Interaction",
     "MoleculeType",
-    "interaction_specs",
-    "io",
-    "lookup",
-    "parser",
-    "schema",
+    "Topology",
+    "TopologyError",
+    "TypeEntry",
+    "drop_vsites",
+    "virtual_site_numbers",
 ]
