@@ -1,916 +1,604 @@
-import unittest
+"""Reading and writing of GROMACS topologies."""
+
+import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from gmxtopology import Topology
-from gmxtopology.topology import Atom, AtomType, Defaults, MoleculeType, System
+import pytest
 
+from gmxtopology import Topology, TopologyError, drop_vsites
 
 ROOT = Path(__file__).resolve().parents[1]
 GROMACS_FIXTURES = ROOT / "tests/fixtures/gromacs-v2026.2"
 PARMED_FIXTURES = ROOT / "tests/fixtures/parmed-96ec61a"
 PROSECCO_FIXTURES = ROOT / "tests/fixtures/prosECCo75-e4831a4"
 
-
-class TopologyParsingTests(unittest.TestCase):
-    def test_section_from_line_helpers_construct_records(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "from-line.top"
-            path.write_text("")
-            top = Topology.__new__(Topology)
-            top.source = path.resolve()
-            top.defaults = None
-            top.atomtypes = []
-            top.nonbond_params = []
-            top.bondtypes = []
-            top.pairtypes = []
-            top.angletypes = []
-            top.dihedraltypes = []
-            top.constrainttypes = []
-            top.moleculetypes = []
-            top.system = None
-            top.molecules = {}
-            top.defines = []
-
-            defaults = Defaults.from_line(["1", "2"], top)
-            self.assertEqual(defaults.gen_pairs, "no")
-
-            top.defaults = defaults
-            atomtype = AtomType.from_line(
-                ["OW", "15.9994", "-0.834", "A", "0.3165", "0.65"],
-                top,
-            )
-            top.atomtypes.append(atomtype)
-            self.assertEqual(atomtype.name, "OW")
-
-            molecule = MoleculeType.from_line(["SOL", "3"], top)
-            atom = Atom.from_line(
-                ["1", "OW", "1", "SOL", "OW", "1", "-0.834", "15.9994"],
-                top,
-                molecule,
-            )
-            system = System.from_line(["Water"], top)
-
-        self.assertEqual(molecule.name, "SOL")
-        self.assertEqual(atom.type.name, "OW")
-        self.assertEqual(system.description, "Water")
-
-    def test_example_topology_parses(self) -> None:
-        top = Topology(ROOT / "examples/topol.top")
-
-        self.assertEqual(len(top.atomtypes), 49)
-        self.assertEqual(len(top.moleculetypes), 2)
-        self.assertEqual(len(top.molecules), 2)
-        self.assertEqual(len(top.atoms), 53444)
-
-    def test_example_topology_with_conditionals_parses(self) -> None:
-        top = Topology(ROOT / "examples/topol_new.top")
-
-        self.assertEqual(len(top.atomtypes), 22)
-        self.assertEqual(len(top.moleculetypes), 2)
-        self.assertEqual(len(top.molecules), 2)
-        self.assertEqual(len(top.atoms), 53444)
-
-    def test_roundtrip_output_reparses(self) -> None:
-        source = Topology(ROOT / "examples/topol.top")
-        output = Path("/tmp/gmxtop-roundtrip.top")
-
-        source.write(output, overwrite=True)
-        reparsed = Topology(output)
-
-        self.assertEqual(len(reparsed.moleculetypes), len(source.moleculetypes))
-        self.assertEqual(len(reparsed.molecules), len(source.molecules))
-        self.assertEqual(len(reparsed.atoms), len(source.atoms))
-        self.assertEqual(
-            {atom.type.name for atom in reparsed.atoms},
-            {atom.type.name for atom in source.atoms},
-        )
-
-    def test_official_gromacs_water_topologies_roundtrip(self) -> None:
-        expected = {
-            "spce": (3, 1, 0),
-            "tip3p": (3, 1, 0),
-            "tip4p": (4, 1, 1),
-        }
-
-        with TemporaryDirectory() as tmpdir:
-            for model, (atoms, settles, virtual_sites3) in expected.items():
-                with self.subTest(model=model):
-                    source = GROMACS_FIXTURES / f"topol-{model}.top"
-                    output = Path(tmpdir) / f"topol-{model}.top"
-                    top = Topology(source)
-                    molecule = top.molecules["SOL"][0]
-
-                    self.assertEqual(len(molecule.atoms), atoms)
-                    self.assertEqual(len(molecule.settles), settles)
-                    self.assertEqual(len(molecule.virtual_sites3), virtual_sites3)
-
-                    top.write(output)
-                    reparsed = Topology(output)
-                    self.assertEqual(len(reparsed.atoms), atoms)
-
-    def test_official_gromacs_urea_topology_roundtrip(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "topol-urea.top"
-            top = Topology(GROMACS_FIXTURES / "topol-urea.top")
-            molecule = top.molecules["URE"][0]
-
-            self.assertEqual(len(molecule.atoms), 8)
-            self.assertEqual(len(molecule.bonds), 7)
-            self.assertTrue(all(bond.func == 1 for bond in molecule.bonds))
-            self.assertEqual(len(molecule.dihedrals), 15)
-
-            top.write(output)
-            reparsed = Topology(output)
-            self.assertEqual(len(reparsed.atoms), 8)
-
-    def test_parmed_real_world_topologies_roundtrip(self) -> None:
-        expected = {
-            "01.1water/topol.top": 3,
-            "02.6water/topol.top": 24,
-            "03.AlaGlu/topol.top": 49,
-            (
-                "11a.Toluene-Cyclohexane_conversion/"
-                "toluene_cyclohexane_10_500_parmed.top"
-            ): 9150,
-            "12.DPPC/topol.top": 1132,
-            "12A.DPPC_Amber/topol.top": 1132,
-        }
-
-        with TemporaryDirectory() as tmpdir:
-            for index, (relative, atoms) in enumerate(expected.items()):
-                with self.subTest(topology=relative):
-                    top = Topology(PARMED_FIXTURES / relative)
-                    output = Path(tmpdir) / f"parmed-{index}.top"
-
-                    self.assertEqual(len(top.atoms), atoms)
-                    top.write(output)
-
-                    reparsed = Topology(output)
-                    self.assertEqual(len(reparsed.atoms), atoms)
-
-    def test_parmed_solvated_dhfr_topology_parses(self) -> None:
-        top = Topology(PARMED_FIXTURES / "07.DHFR-Liquid-NoPBC/topol.top")
-
-        self.assertEqual(len(top.moleculetypes), 12)
-        self.assertEqual(len(top.molecules), 3)
-        self.assertEqual(len(top.atoms), 23569)
-
-    def test_remove_virtual_sites_updates_atom_references(self) -> None:
-        top = Topology(GROMACS_FIXTURES / "topol-tip4p.top")
-        molecule = top.molecules["SOL"][0]
-
-        molecule.remove_vsites()
-
-        self.assertEqual(len(molecule.atoms), 3)
-        self.assertEqual(len(molecule.virtual_sites3), 0)
-        self.assertTrue(
-            all(
-                atom.nr <= 3
-                for exclusion in molecule.exclusions
-                for atom in exclusion.excluded
-            )
-        )
-
-    def test_prosecco_popc_topology_parses(self) -> None:
-        top = Topology(PROSECCO_FIXTURES / "topol-popc.top")
-        molecule = top.molecules["POPC_s"][0]
-
-        self.assertEqual(len(molecule.atoms), 134)
-        self.assertEqual(len(molecule.bonds), 133)
-        self.assertEqual(len(molecule.pairs), 356)
-        self.assertEqual(len(molecule.angles), 256)
-        self.assertEqual(len(molecule.dihedrals), 467)
-
-    def test_prosecco_charmm_sections_roundtrip(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "topol-cmap.top"
-            top = Topology(PROSECCO_FIXTURES / "topol-cmap.top")
-
-            self.assertEqual(
-                [section.name for section in top.raw_sections],
-                ["implicit_genborn_params", "cmaptypes", "cmaptypes"],
-            )
-            self.assertEqual(
-                [section.name for section in top.molecules["CMAP"][0].raw_sections],
-                ["cmap"],
-            )
-
-            top.write(output)
-            reparsed = Topology(output)
-
-        self.assertEqual(
-            [section.name for section in reparsed.raw_sections],
-            ["implicit_genborn_params", "cmaptypes", "cmaptypes"],
-        )
-        self.assertEqual(
-            [section.name for section in reparsed.molecules["CMAP"][0].raw_sections],
-            ["cmap"],
-        )
-
-    def test_manual_backed_optional_and_variable_sections_parse(self) -> None:
-        topology_text = """
+HEADER = """
 [ defaults ]
-1 2
+1 2 no 1.0 1.0
 
 [ atomtypes ]
 ; name  bonded  at.num  mass   charge ptype sigma epsilon
-C      12.011  0.0     A      0.34   0.10
-H      HC      1.008   0.0    A      0.25   0.05
-O      OT      8       15.999 -0.5   A      0.30   0.20
-N      7       14.007  -0.3   A      0.32   0.15
+A   12.011  0.0  A  0.34  0.10
+B   B_bt  6  1.008  0.0  A  0.25  0.05
+C   12  14.007  -0.3  A  0.32  0.15
+"""
 
-[ constrainttypes ]
-C H 1 0.109
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-1 C 1 MOL C1 1 0.0 12.011
-2 H 1 MOL H1 2 0.0 1.008
-3 O 1 MOL O1 3 -0.5 15.999
-4 N 1 MOL N1 4 -0.3 14.007
-
-[ constraints ]
-1 2 1
-
-[ angles ]
-1 2 3 9 0.25 1000
-2 3 4 10 120.0 50.0
-
-[ virtual_sitesn ]
-4 1 1 2 3
-
+FOOTER = """
 [ system ]
-ManualCoverage
+test
 
 [ molecules ]
 MOL 1
-""".strip()
+"""
 
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "manual-coverage.top"
-            path.write_text(topology_text)
-            top = Topology(path)
-
-        self.assertEqual(top.defaults.gen_pairs, "no")
-        self.assertEqual(top.defaults.fudgeLJ, 1.0)
-        self.assertEqual(top.defaults.fudgeQQ, 1.0)
-        self.assertIsNone(top.defaults.n)
-
-        atomtypes = {atomtype.name: atomtype for atomtype in top.atomtypes}
-        self.assertIsNone(atomtypes["C"].bonded_type)
-        self.assertIsNone(atomtypes["C"].atnum)
-        self.assertEqual(atomtypes["H"].bonded_type, "HC")
-        self.assertIsNone(atomtypes["H"].atnum)
-        self.assertEqual(atomtypes["O"].bonded_type, "OT")
-        self.assertEqual(atomtypes["O"].atnum, 8)
-        self.assertIsNone(atomtypes["N"].bonded_type)
-        self.assertEqual(atomtypes["N"].atnum, 7)
-
-        molecule = top.molecules["MOL"][0]
-        self.assertEqual(len(molecule.constraints), 1)
-        self.assertEqual(molecule.constraints[0].params["b0"], 0.109)
-        self.assertEqual(molecule.angles[0].func, 9)
-        self.assertEqual(molecule.angles[0].params["a0"], 0.25)
-        self.assertEqual(molecule.angles[1].func, 10)
-        self.assertEqual(molecule.angles[1].params["th0"], 120.0)
-        self.assertEqual(molecule.virtual_sitesn[0].params["from"], "1 2 3")
-
-        with TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "manual-coverage-output.top"
-            top.write(output)
-            reparsed = Topology(output)
-
-        self.assertEqual(len(reparsed.constrainttypes), 0)
-        self.assertEqual(
-            reparsed.molecules["MOL"][0].constraints[0].params["b0"],
-            0.109,
-        )
-
-    def test_written_topology_is_flattened_and_filters_global_parameters(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2 no
-
-[ atomtypes ]
-A 12.0 0.0 A 0.30 0.10
-B 14.0 0.0 A 0.32 0.12
-UNUSED 16.0 0.0 A 0.34 0.14
-RAW 18.0 0.0 A 0.36 0.16
-
-[ nonbond_params ]
-A B 1 0.31 0.11
-A UNUSED 1 0.33 0.13
-
-[ bondtypes ]
-A B 1 0.10 1000
-
-[ pairtypes ]
-A B 1 0.20 0.30
-
-[ angletypes ]
-A B A 1 109.0 200
-
-[ dihedraltypes ]
-A B A B 9 180.0 4.0 3
-
-[ constrainttypes ]
-A A 1 0.20
-
-[ opaque_global ]
-RAW preserved
-
+ATOMS = """
 [ moleculetype ]
 MOL 3
 
 [ atoms ]
-1 A 1 MOL A1 1 0.0 12.0
-2 B 1 MOL B1 2 0.0 14.0
-3 A 1 MOL A2 3 0.0 12.0
-4 B 1 MOL B2 4 0.0 14.0
+1 A 1 MOL A1 1 0.0 12.011
+2 B 1 MOL B1 2 0.1 1.008
+3 C 1 MOL C1 3 -0.1 14.007
+4 A 1 MOL A2 4 0.0 12.011
+"""
 
+
+def read(tmp_path: Path, text: str, **kwargs) -> Topology:
+    path = tmp_path / "in.top"
+    path.write_text(text)
+    return Topology(path, **kwargs)
+
+
+def roundtrip(tmp_path: Path, top: Topology) -> Topology:
+    out = tmp_path / "out.top"
+    top.write(out)
+    return Topology(out)
+
+
+def interactions(top: Topology) -> dict:
+    return {
+        mol.name: {
+            section: [(i.atoms, i.func, dict(i.params)) for i in items]
+            for section, items in mol.interactions.items()
+            if items
+        }
+        for mol in {m.name: m for m, _ in top.molecules}.values()
+    }
+
+
+# -- preprocessing ---------------------------------------------------------
+
+
+def test_conditionals_are_evaluated_against_defines(tmp_path):
+    text = (
+        HEADER
+        + """
+#ifdef HEAVY
+#define MASS 12.0
+#else
+#define MASS 1.0
+#endif
+"""
+        + ATOMS
+        + """
 [ bonds ]
-1 2 1
+1 2 1 0.1 1000
+#ifndef NOBOND
+2 3 1 0.2 MASS
+#endif
+"""
+        + FOOTER
+    )
 
-[ pairs ]
-1 2 1
+    top = read(tmp_path, text)
+    assert [d.directive for d in top.defines] == ["MASS"]
+    assert top.defines[0].argument == "1.0"
+    assert [b.params["kb"] for b in top.moleculetype("MOL").bonds] == [1000.0, "MASS"]
 
-[ angles ]
-1 2 3 1
+    top = read(tmp_path, text, defines={"HEAVY": None, "NOBOND": None})
+    assert top.defines[0].argument == "12.0"
+    assert len(top.moleculetype("MOL").bonds) == 1
 
-[ dihedrals ]
-1 2 3 4 9
 
+def test_include_search_continuation_and_inactive_missing_include(tmp_path):
+    (tmp_path / "ff").mkdir()
+    (tmp_path / "ff/forcefield.itp").write_text(HEADER)
+    (tmp_path / "extra").mkdir()
+    (tmp_path / "extra/mol.itp").write_text(ATOMS)
+    text = (
+        """
+#include "ff/forcefield.itp"
+#ifdef NEVER
+#include "missing.itp"
+#endif
+#include "mol.itp"
+[ bonds ]
+1 2 1 \\
+   0.1 1000
+"""
+        + FOOTER
+    )
+
+    top = read(tmp_path, text, include_dirs=[tmp_path / "extra"])
+    assert top.moleculetype("MOL").bonds[0].params == {"b0": 0.1, "kb": 1000.0}
+
+    with pytest.raises(FileNotFoundError, match="missing.itp"):
+        read(tmp_path, text, defines={"NEVER": None}, include_dirs=[tmp_path / "extra"])
+
+
+def test_errors_carry_file_and_line(tmp_path):
+    text = HEADER + ATOMS + "[ bonds ]\n1 2 1 0.1 abc\n" + FOOTER
+    with pytest.raises(TopologyError, match=r"in\.top:\d+"):
+        read(tmp_path, text)
+
+
+@pytest.mark.parametrize(
+    "bad, message",
+    [
+        ("#ifdef X\n" + HEADER, "Unclosed conditional"),
+        ("#if X\n#endif\n" + HEADER, "Unsupported preprocessor directive"),
+        ("#endif\n" + HEADER, "unmatched #endif"),
+    ],
+)
+def test_invalid_preprocessor_input_is_rejected(tmp_path, bad, message):
+    with pytest.raises(TopologyError, match=message):
+        read(tmp_path, bad + ATOMS + FOOTER)
+
+
+# -- parameter tables ------------------------------------------------------
+
+
+def test_atomtype_layouts(tmp_path):
+    top = read(tmp_path, HEADER + ATOMS + FOOTER)
+    a, b, c = (top.atomtype(name) for name in "ABC")
+    assert (a.bonded_type, a.atnum) == (None, None)
+    assert (b.bonded_type, b.atnum) == ("B_bt", 6)
+    assert (c.bonded_type, c.atnum) == (None, 12)
+    assert (a.btype, b.btype, c.btype) == ("A", "B_bt", "C")
+
+
+def test_bonded_parameters_are_looked_up_by_bonded_type(tmp_path):
+    text = (
+        HEADER
+        + """
+[ bondtypes ]
+A B_bt 1 0.15 2000
+[ constrainttypes ]
+A C 1 0.12
+"""
+        + ATOMS
+        + """
+[ bonds ]
+1 2
 [ constraints ]
 1 3 1
+"""
+        + FOOTER
+    )
+    mol = read(tmp_path, text).moleculetype("MOL")
+    assert mol.bonds[0].func == 1
+    assert mol.bonds[0].params == {"b0": 0.15, "kb": 2000.0}
+    assert mol.constraints[0].params == {"b0": 0.12}
+
+
+def test_pairtypes_take_precedence_over_gen_pairs(tmp_path):
+    text = (
+        HEADER.replace("1 2 no 1.0 1.0", "1 2 yes 0.5 0.8333")
+        + """
+[ pairtypes ]
+A C 1 0.3 0.4
+"""
+        + ATOMS
+        + """
+[ pairs ]
+1 3 1
+2 4 1
+"""
+        + FOOTER
+    )
+    top = read(tmp_path, text)
+    pairs = top.moleculetype("MOL").pairs
+    assert pairs[0].params == {"sigma": 0.3, "epsilon": 0.4}
+    assert pairs[1].params == {}  # generated by GROMACS from the atom types
+    assert interactions(roundtrip(tmp_path, top)) == interactions(top)
+
+
+def test_missing_parameters_are_an_error_with_context(tmp_path):
+    text = HEADER + ATOMS + "[ angles ]\n1 2 3 1\n" + FOOTER
+    with pytest.raises(TopologyError, match=r"angletypes.*A1.*MOL.*in\.top:\d+"):
+        read(tmp_path, text)
+
+
+def test_dihedraltypes_two_type_forms_and_wildcards(tmp_path):
+    text = (
+        HEADER
+        + """
+[ dihedraltypes ]
+B_bt C 3 1 2 3 4 5 6
+A A 2 10.0 20.0
+X B_bt C X 9 0.0 1.0 1
+"""
+        + ATOMS
+        + """
+[ dihedrals ]
+1 2 3 4 3
+1 2 3 4 2
+4 3 2 1 9
+"""
+        + FOOTER
+    )
+    # atom types A B_bt C A: "j k" is the central pair, impropers use "i l"
+    rb, improper, wild = read(tmp_path, text).moleculetype("MOL").dihedrals
+    assert rb.params["C0"] == 1.0 and rb.params["C5"] == 6.0
+    assert improper.params == {"xi0": 10.0, "kxi": 20.0}
+    assert wild.params["kphi"] == 1.0  # matched in reverse orientation
+
+
+def test_exact_dihedraltype_beats_wildcard(tmp_path):
+    text = (
+        HEADER
+        + """
+[ dihedraltypes ]
+X B_bt C X 9 0.0 1.0 1
+A B_bt C A 9 0.0 5.0 2
+"""
+        + ATOMS
+        + "[ dihedrals ]\n1 2 3 4 9\n"
+        + FOOTER
+    )
+    dihedrals = read(tmp_path, text).moleculetype("MOL").dihedrals
+    assert [d.params["kphi"] for d in dihedrals] == [5.0]
+
+
+def test_func9_adjacent_lines_with_equal_multiplicity_are_all_kept(tmp_path):
+    text = (
+        HEADER
+        + """
+[ dihedraltypes ]
+A B_bt C A 9 0.0 5.0 2
+A B_bt C A 9 180.0 6.0 2
+"""
+        + ATOMS
+        + "[ dihedrals ]\n1 2 3 4 9\n"
+        + FOOTER
+    )
+    dihedrals = read(tmp_path, text).moleculetype("MOL").dihedrals
+    assert [(d.params["phi_s"], d.params["kphi"]) for d in dihedrals] == [
+        (0.0, 5.0),
+        (180.0, 6.0),
+    ]
+
+
+def test_repeated_non_func9_type_replaces_the_earlier_one(tmp_path):
+    text = (
+        HEADER
+        + """
+[ bondtypes ]
+A B_bt 1 0.1 100
+A B_bt 1 0.2 200
+"""
+        + ATOMS
+        + "[ bonds ]\n1 2\n"
+        + FOOTER
+    )
+    assert read(tmp_path, text).moleculetype("MOL").bonds[0].params["kb"] == 200.0
+
+
+# -- molecules -------------------------------------------------------------
+
+
+def test_molecules_keep_order_and_repeated_names(tmp_path):
+    text = (
+        HEADER
+        + ATOMS
+        + """
+[ moleculetype ]
+ION 1
+[ atoms ]
+1 B 1 ION B1 1 1.0 1.008
 
 [ system ]
-Flattened
-
+test
 [ molecules ]
-MOL 1
-""".strip()
+mol 2
+ION 5
+MOL 3
+"""
+    )
+    top = read(tmp_path, text)
+    assert [(m.name, n) for m, n in top.molecules] == [
+        ("MOL", 2),
+        ("ION", 5),
+        ("MOL", 3),
+    ]
+    assert len(top.atoms) == 2 * 4 + 5 + 3 * 4
+    again = roundtrip(tmp_path, top)
+    assert [(m.name, n) for m, n in again.molecules] == [
+        ("MOL", 2),
+        ("ION", 5),
+        ("MOL", 3),
+    ]
 
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "global-types.top"
-            output = Path(tmpdir) / "flattened.top"
-            path.write_text(topology_text)
 
-            top = Topology(path)
-            top.write(output)
-            written = output.read_text()
-            reparsed = Topology(output)
+def test_residue_names_and_atom_defaults_survive(tmp_path):
+    text = (
+        HEADER
+        + """
+[ moleculetype ]
+PEP 3
+[ atoms ]
+1 A 1 ALA A1 1 0.5
+2 B 2 GLY B1 1
+"""
+        + FOOTER.replace("MOL 1", "PEP 1")
+    )
+    top = roundtrip(tmp_path, read(tmp_path, text))
+    atoms = top.moleculetype("PEP").atoms
+    assert [a.resname for a in atoms] == ["ALA", "GLY"]
+    assert [a.charge for a in atoms] == [0.5, 0.0]  # omitted: atom type charge
+    assert [a.mass for a in atoms] == [12.011, 1.008]  # omitted: atom type mass
 
-        self.assertEqual(
-            {atomtype.name for atomtype in reparsed.atomtypes},
-            {"A", "B", "RAW"},
-        )
-        self.assertEqual(len(reparsed.nonbond_params), 1)
-        self.assertEqual(reparsed.nonbond_params[0].ai.name, "A")
-        self.assertEqual(reparsed.nonbond_params[0].aj.name, "B")
 
-        for section in (
-            "bondtypes",
-            "pairtypes",
-            "angletypes",
-            "dihedraltypes",
-            "constrainttypes",
-        ):
-            self.assertNotIn(f"[ {section} ]", written)
+def test_atoms_must_be_numbered_consecutively(tmp_path):
+    text = (
+        HEADER
+        + "[ moleculetype ]\nMOL 3\n[ atoms ]\n1 A 1 MOL A1 1 0 1\n3 A 1 MOL A2 1 0 1\n"
+    )
+    with pytest.raises(TopologyError, match="numbered consecutively"):
+        read(tmp_path, text + FOOTER)
 
-        molecule = reparsed.molecules["MOL"][0]
-        self.assertEqual(molecule.bonds[0].params["b0"], 0.10)
-        self.assertEqual(molecule.pairs[0].params["epsilon"], 0.30)
-        self.assertEqual(molecule.angles[0].params["th0"], 109.0)
-        self.assertEqual(molecule.dihedrals[0].params["mult"], 3)
-        self.assertEqual(molecule.constraints[0].params["b0"], 0.20)
 
-    def test_filtered_output_preserves_conditional_section_positions(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2 no
+def test_parameter_tables_after_a_molecule_are_rejected(tmp_path):
+    text = HEADER + ATOMS + "[ bondtypes ]\nA B_bt 1 0.1 100\n" + FOOTER
+    with pytest.raises(TopologyError, match="parameter tables must come first"):
+        read(tmp_path, text)
 
-[ atomtypes ]
-#ifdef MODIFIED
-A 12.0 0.0 A 0.30 0.10
-B 14.0 0.0 A 0.32 0.12
-UNUSED 16.0 0.0 A 0.34 0.14
-#else
-A 12.0 0.0 A 0.31 0.11
-B 14.0 0.0 A 0.33 0.13
-UNUSED 16.0 0.0 A 0.35 0.15
-#endif
 
-[ nonbond_params ]
-#ifdef MODIFIED
-A B 1 0.31 0.11
-A UNUSED 1 0.33 0.13
-#else
-A B 1 0.32 0.12
-A UNUSED 1 0.34 0.14
-#endif
+def test_connection_bond_needs_no_parameters(tmp_path):
+    text = HEADER + ATOMS + "[ bonds ]\n1 2 5\n" + FOOTER
+    bond = read(tmp_path, text).moleculetype("MOL").bonds[0]
+    assert (bond.func, bond.params) == (5, {})
 
+
+def test_b_state_parameters_and_atoms(tmp_path):
+    text = (
+        HEADER
+        + """
 [ moleculetype ]
 MOL 3
-
 [ atoms ]
-1 A 1 MOL A1 1 0.0 12.0
-2 B 1 MOL B1 2 0.0 14.0
-
-[ system ]
-ConditionalFiltering
-
-[ molecules ]
-MOL 1
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "conditional-filtering.top"
-            output = Path(tmpdir) / "flattened.top"
-            path.write_text(topology_text)
-
-            top = Topology(path)
-            top.write(output)
-            written = output.read_text()
-            reparsed = Topology(output)
-
-        self.assertNotIn("UNUSED", written)
-        self.assertEqual(written.count("#ifdef MODIFIED\n"), 2)
-        self.assertEqual(written.count("#else\n"), 2)
-        self.assertEqual(written.count("#endif\n"), 2)
-
-        atomtypes_start = written.index("#ifdef MODIFIED\n")
-        atomtypes_else = written.index("#else\n", atomtypes_start)
-        atomtypes_end = written.index("#endif\n", atomtypes_else)
-        nonbond_start = written.index("#ifdef MODIFIED\n", atomtypes_end)
-        nonbond_else = written.index("#else\n", nonbond_start)
-        nonbond_end = written.index("#endif\n", nonbond_else)
-
-        self.assertLess(atomtypes_start, written.index("[ atomtypes ]"))
-        self.assertLess(written.index("[ atomtypes ]"), atomtypes_else)
-        self.assertLess(atomtypes_else, atomtypes_end)
-        self.assertLess(atomtypes_end, nonbond_start)
-        self.assertLess(nonbond_start, written.index("[ nonbond_params ]"))
-        self.assertLess(written.index("[ nonbond_params ]"), nonbond_else)
-        self.assertLess(nonbond_else, nonbond_end)
-
-        expected_states = [
-            ("ifdef MODIFIED",),
-            ("ifdef MODIFIED",),
-            ("else ifdef MODIFIED",),
-            ("else ifdef MODIFIED",),
-        ]
-        self.assertEqual(
-            [atomtype.ifdef_state for atomtype in reparsed.atomtypes],
-            expected_states,
-        )
-        self.assertEqual(
-            [param.ifdef_state for param in reparsed.nonbond_params],
-            [("ifdef MODIFIED",), ("else ifdef MODIFIED",)],
-        )
-
-    def test_filtered_output_reconstructs_empty_conditional_branches(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2 no
-
-[ atomtypes ]
-A 12.0 0.0 A 0.30 0.10
-B 14.0 0.0 A 0.32 0.12
-UNUSED 16.0 0.0 A 0.34 0.14
-
-[ nonbond_params ]
-#ifdef OUTER
-#ifdef OMITTED
-A UNUSED 1 0.33 0.13
-#else
-A B 1 0.31 0.11
-#endif
-#endif
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-1 A 1 MOL A1 1 0.0 12.0
-2 B 1 MOL B1 2 0.0 14.0
-
-[ system ]
-EmptyConditionalBranch
-
-[ molecules ]
-MOL 1
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "conditional-filtering.top"
-            output = Path(tmpdir) / "flattened.top"
-            path.write_text(topology_text)
-
-            top = Topology(path)
-            top.write(output)
-            written = output.read_text()
-            reparsed = Topology(output)
-
-        self.assertNotIn("UNUSED", written)
-        self.assertIn(
-            "#ifdef OUTER\n"
-            "#ifdef OMITTED\n"
-            "#else\n"
-            "[ nonbond_params ]",
-            written,
-        )
-        self.assertIn("[ nonbond_params ]", written)
-        self.assertIn("#endif\n#endif\n", written)
-        self.assertEqual(
-            reparsed.nonbond_params[0].ifdef_state,
-            ("ifdef OUTER", "else ifdef OMITTED"),
-        )
-
-    def test_conditional_defines_roundtrip_in_their_original_branches(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2 no
-
-#ifdef HEAVY
-#define PARTICLE_MASS 4.0
-#else
-#define PARTICLE_MASS 1.0
-#endif
-
-[ atomtypes ]
-A PARTICLE_MASS 0.0 A 0.30 0.10
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-1 A 1 MOL A1 1 0.0 PARTICLE_MASS
-
-[ system ]
-ConditionalDefines
-
-[ molecules ]
-MOL 1
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "conditional-defines.top"
-            output = Path(tmpdir) / "flattened.top"
-            path.write_text(topology_text)
-
-            top = Topology(path)
-            top.write(output)
-            written = output.read_text()
-            reparsed = Topology(output)
-
-        self.assertIn(
-            "#ifdef HEAVY\n"
-            "#define PARTICLE_MASS 4.0\n"
-            "#else\n"
-            "#define PARTICLE_MASS 1.0\n"
-            "#endif\n",
-            written,
-        )
-        self.assertEqual(
-            [define.ifdef_state for define in reparsed.defines],
-            [("ifdef HEAVY",), ("else ifdef HEAVY",)],
-        )
-
-    def test_marker_define_and_ifndef_roundtrip(self) -> None:
-        topology_text = """
-#define POSRES
-#define RESTRAINT_FC 1000 1000 1000
-
-[ defaults ]
-1 2
-
-[ atomtypes ]
-C 12.011 0.0 A 0.34 0.10
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-#ifndef FLEXIBLE
-1 C 1 MOL C1 1 0.0 12.011
-#endif
-
-[ system ]
-Conditional
-
-[ molecules ]
-MOL 1
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "conditional.top"
-            output = Path(tmpdir) / "conditional-output.top"
-            path.write_text(topology_text)
-
-            top = Topology(path)
-            defines = {define.directive: define.argument for define in top.defines}
-            atom = top.molecules["MOL"][0].atoms[0]
-
-            self.assertIsNone(defines["POSRES"])
-            self.assertEqual(defines["RESTRAINT_FC"], "1000 1000 1000")
-            self.assertEqual(atom.ifdef_state, ("ifndef FLEXIBLE",))
-
-            top.write(output)
-            written = output.read_text()
-            self.assertIn("#define POSRES\n", written)
-            self.assertIn("#define RESTRAINT_FC 1000 1000 1000\n", written)
-            self.assertLess(
-                written.index("#define POSRES\n"),
-                written.index("#define RESTRAINT_FC 1000 1000 1000\n"),
-            )
-            self.assertIn("#ifndef FLEXIBLE\n", written)
-
-            reparsed = Topology(output)
-            reparsed_atom = reparsed.molecules["MOL"][0].atoms[0]
-            self.assertEqual(reparsed_atom.ifdef_state, ("ifndef FLEXIBLE",))
-
-    def test_free_energy_b_state_parameters_roundtrip(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2
-
-[ atomtypes ]
-A 12.0 0.0 A 0.34 0.10
-B 14.0 0.0 A 0.36 0.12
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-1 A 1 MOL A1 1 0.0 B -0.2 14.0
-2 A 1 MOL A2 1 0.0
-3 A 1 MOL A3 1 0.0 12.0
-
+1 A 1 MOL A1 1 0.0 12.011 B 0.1 1.008
+2 B 1 MOL B1 2 0.1 1.008
 [ bonds ]
-1 2 1 0.1 345000 0.2 300000
+1 2 1 0.1 1000 0.2 2000
+"""
+        + FOOTER
+    )
+    top = roundtrip(tmp_path, read(tmp_path, text))
+    mol = top.moleculetype("MOL")
+    assert mol.atoms[0].type_b == "B" and mol.atoms[0].charge_b == 0.1
+    assert mol.bonds[0].params == {"b0": 0.1, "kb": 1000.0, "b0_b": 0.2, "kb_b": 2000.0}
 
-[ angles ]
-1 2 3 1 109.47 383 120.0 400
 
-[ system ]
-FreeEnergy
+def test_intermolecular_interactions_are_written_last(tmp_path):
+    text = (
+        HEADER
+        + ATOMS
+        + FOOTER
+        + """
+[ intermolecular_interactions ]
+[ bonds ]
+1 5 6 0.3 100
+"""
+    )
+    top = roundtrip(tmp_path, read(tmp_path, text))
+    assert top.intermolecular["bonds"][0].atoms == (1, 5)
+    assert top.intermolecular["bonds"][0].func == 6
 
-[ molecules ]
-MOL 1
-""".strip()
 
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "free-energy.top"
-            output = Path(tmpdir) / "free-energy-output.top"
-            path.write_text(topology_text)
+# -- macros ----------------------------------------------------------------
 
-            top = Topology(path)
-            molecule = top.molecules["MOL"][0]
 
-            self.assertIsNone(molecule.atoms[0].mass)
-            self.assertIsNone(molecule.atoms[1].mass)
-            self.assertEqual(molecule.atoms[0].type_b.name, "B")
-            self.assertEqual(molecule.atoms[0].charge_b, -0.2)
-            self.assertEqual(molecule.atoms[0].mass_b, 14.0)
-            self.assertEqual(molecule.bonds[0].params["b0_b"], 0.2)
-            self.assertEqual(molecule.bonds[0].params["kb_b"], 300000.0)
-            self.assertEqual(molecule.angles[0].params["th0_b"], 120.0)
-            self.assertEqual(molecule.angles[0].params["kth_b"], 400.0)
+def test_macros_stay_editable_and_are_defined_in_the_output(tmp_path):
+    text = (
+        """
+#define KB 1000
+#define GB_X 0.1 2000
+"""
+        + HEADER
+        + ATOMS
+        + """
+[ bonds ]
+1 2 1 0.1 KB
+2 3 1 GB_X
+"""
+        + FOOTER
+    )
+    top = read(tmp_path, text)
+    bonds = top.moleculetype("MOL").bonds
+    assert bonds[0].params["kb"] == "KB"  # symbolic, follows the #define
+    assert bonds[1].params == {"b0": 0.1, "kb": 2000.0}  # one macro, two values
 
-            top.write(output)
-            reparsed = Topology(output)
+    top.defines[0].update(argument=1500)
+    out = tmp_path / "out.top"
+    top.write(out)
+    text = out.read_text()
+    assert "#define KB 1500" in text
+    assert "GB_X" not in text
+    assert Topology(out).moleculetype("MOL").bonds[0].params["kb"] == "KB"
 
-        reparsed_molecule = reparsed.molecules["MOL"][0]
-        self.assertEqual(reparsed_molecule.atoms[0].type_b.name, "B")
-        self.assertEqual(reparsed_molecule.bonds[0].params["kb_b"], 300000.0)
-        self.assertEqual(reparsed_molecule.angles[0].params["kth_b"], 400.0)
 
-    def test_nested_conditional_include_roundtrip(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2
+# -- CMAP ------------------------------------------------------------------
 
-[ atomtypes ]
-C 12.011 0.0 A 0.34 0.10
 
-#ifndef FLEXIBLE
-#include "molecule.itp"
-#endif
-
-[ system ]
-Included
-
-[ molecules ]
-MOL 1
-""".strip()
-        molecule_text = """
+def test_only_used_cmap_grids_are_written_and_cmap_is_renumbered(tmp_path):
+    grid = " ".join(str(float(i)) for i in range(4))
+    text = (
+        HEADER
+        + f"""
+[ cmaptypes ]
+A B_bt C A B_bt 1 2 2 \\
+{grid}
+C C C C C 1 2 2 {grid}
+"""
+        + """
 [ moleculetype ]
 MOL 3
-
 [ atoms ]
-#ifdef HEAVY
-1 C 1 MOL C1 1 0.0 12.011
-#else
-1 C 1 MOL C1 1 0.0 12.011
-#endif
-""".strip()
+1 B 1 MOL V1 1 0 1.008
+2 A 1 MOL A1 1 0 12.011
+3 B 1 MOL B1 1 0 1.008
+4 C 1 MOL C1 1 0 14.007
+5 A 1 MOL A2 1 0 12.011
+6 B 1 MOL B2 1 0 1.008
+[ cmap ]
+2 3 4 5 6 1
+[ virtual_sites1 ]
+1 2 1
+"""
+        + FOOTER
+    )
+    top = read(tmp_path, text)
+    assert len(top.cmaptypes) == 2
 
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "conditional-include.top"
-            include = Path(tmpdir) / "molecule.itp"
-            output = Path(tmpdir) / "conditional-include-output.top"
-            path.write_text(topology_text)
-            include.write_text(molecule_text)
+    drop_vsites(top.moleculetype("MOL"))
+    assert top.moleculetype("MOL").cmap[0].atoms == (1, 2, 3, 4, 5)
 
-            top = Topology(path)
-            molecule = top.molecules["MOL"][0]
-            self.assertEqual(molecule.ifdef_state, ("ifndef FLEXIBLE",))
-            self.assertEqual(
-                [atom.ifdef_state for atom in molecule.atoms],
-                [
-                    ("ifndef FLEXIBLE", "ifdef HEAVY"),
-                    ("ifndef FLEXIBLE", "else ifdef HEAVY"),
-                ],
-            )
+    out = roundtrip(tmp_path, top)
+    assert [c.types for c in out.cmaptypes] == [("A", "B_bt", "C", "A", "B_bt")]
+    assert out.cmaptypes[0].values == [0.0, 1.0, 2.0, 3.0]
+    assert out.moleculetype("MOL").cmap[0].atoms == (1, 2, 3, 4, 5)
 
-            top.write(output)
-            reparsed = Topology(output)
-            reparsed_molecule = reparsed.molecules["MOL"][0]
-            self.assertEqual(reparsed_molecule.ifdef_state, ("ifndef FLEXIBLE",))
-            self.assertEqual(
-                [atom.ifdef_state for atom in reparsed_molecule.atoms],
-                [
-                    ("ifndef FLEXIBLE", "ifdef HEAVY"),
-                    ("ifndef FLEXIBLE", "else ifdef HEAVY"),
-                ],
-            )
 
-    def test_missing_include_is_allowed_only_inside_a_conditional(self) -> None:
-        unconditional_text = """
-[ defaults ]
-1 2
+def test_prosecco_cmap_fixture_writes_only_the_used_grid(tmp_path):
+    top = Topology(PROSECCO_FIXTURES / "topol-cmap.top")
+    assert len(top.cmaptypes) == 12
+    out = roundtrip(tmp_path, top)
+    assert len(out.cmaptypes) == 1
+    assert out.cmaptypes[0].types == ("C", "NH1", "CT1", "C", "NH1")
+    assert out.cmaptypes[0].values == top.cmaptypes[0].values
+    assert (
+        "cmaptypes"
+        not in (tmp_path / "out.top").read_text().split("[ moleculetype ]")[1]
+    )
 
-#include "missing.itp"
-""".strip()
-        conditional_text = """
-[ defaults ]
-1 2
 
-#ifdef OPTIONAL
-#include "missing.itp"
-#endif
+# -- writing only what is relevant -------------------------------------------
 
-[ atomtypes ]
-C 12.011 0.0 A 0.34 0.10
 
+def test_written_topology_contains_only_the_used_parts(tmp_path):
+    text = (
+        HEADER
+        + """
+[ nonbond_params ]
+A B 1 0.5 0.6
+A C 1 0.7 0.8
+[ bondtypes ]
+A B_bt 1 0.1 100
+"""
+        + ATOMS
+        + "[ bonds ]\n1 2\n"
+        + """
 [ moleculetype ]
-MOL 3
-
+UNUSED 3
 [ atoms ]
-1 C 1 MOL C1 1 0.0 12.011
-
-[ system ]
-MissingOptionalInclude
-
-[ molecules ]
-MOL 1
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            unconditional = Path(tmpdir) / "unconditional.top"
-            conditional = Path(tmpdir) / "conditional.top"
-            unconditional.write_text(unconditional_text)
-            conditional.write_text(conditional_text)
-
-            with self.assertRaises(FileNotFoundError):
-                Topology(unconditional)
-
-            top = Topology(conditional)
-
-        self.assertEqual(len(top.atoms), 1)
-
-    def test_molecule_type_names_are_case_insensitive(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2
-
-[ atomtypes ]
-C 12.011 0.0 A 0.34 0.10
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-1 C 1 MOL C1 1 0.0 12.011
-
-[ system ]
-MoleculeNameCase
-
-[ molecules ]
-mol 1
-""".strip()
-        duplicate_text = """
-[ defaults ]
-1 2
-
-[ moleculetype ]
-MOL 3
-
-[ moleculetype ]
-mol 3
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "case-insensitive.top"
-            duplicate = Path(tmpdir) / "duplicate.top"
-            path.write_text(topology_text)
-            duplicate.write_text(duplicate_text)
-
-            top = Topology(path)
-
-            with self.assertRaisesRegex(ValueError, "Duplicate moleculetype"):
-                Topology(duplicate)
-
-        self.assertEqual(list(top.molecules), ["MOL"])
-
-    def test_molecule_fragment_include_inherits_context(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2
-
-[ atomtypes ]
-C 12.011 0.0 A 0.34 0.10
-
-[ moleculetype ]
-MOL 3
-
-[ atoms ]
-1 C 1 MOL C1 1 0.0 12.011
-
-#ifdef POSRES
-#include "posre.itp"
-#endif
-
-[ system ]
-IncludedRestraints
-
-[ molecules ]
-MOL 1
-""".strip()
-        restraint_text = """
-[ position_restraints ]
-1 1 1000 1000 1000
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "topol.top"
-            include = Path(tmpdir) / "posre.itp"
-            path.write_text(topology_text)
-            include.write_text(restraint_text)
-
-            top = Topology(path)
-
-        restraints = top.molecules["MOL"][0].position_restraints
-        self.assertEqual(len(restraints), 1)
-        self.assertEqual(restraints[0].params["kx"], 1000.0)
-        self.assertEqual(restraints[0].ifdef_state, ("ifdef POSRES",))
-
-    def test_unclosed_conditional_is_rejected(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2
-
-#ifndef FLEXIBLE
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "unclosed.top"
-            path.write_text(topology_text)
-
-            with self.assertRaisesRegex(ValueError, "Unclosed conditional block"):
-                Topology(path)
-
-    def test_unsupported_preprocessor_directive_is_rejected(self) -> None:
-        topology_text = """
-[ defaults ]
-1 2
-
-#undef POSRES
-""".strip()
-
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "unsupported-directive.top"
-            path.write_text(topology_text)
-
-            with self.assertRaisesRegex(
-                NotImplementedError,
-                "Unsupported preprocessor directive",
-            ):
-                Topology(path)
+1 C 1 UNUSED C1 1 0 14.007
+"""
+        + FOOTER.replace("MOL 1", "MOL 2")
+    )
+    top = read(tmp_path, text)
+    top.atomtypes.append(
+        type(top.atomtypes[0])("Z", None, None, 1.0, 0.0, "A", 0.1, 0.1)
+    )
+    out = roundtrip(tmp_path, top)
+    assert [a.name for a in out.atomtypes] == ["A", "B", "C"]
+    assert [m.name for m in out.moleculetypes] == ["MOL"]
+    assert "bondtypes" not in (tmp_path / "out.top").read_text()
+    assert len(out.types["nonbond_params"]) == 2
+    assert out.moleculetype("MOL").bonds[0].params == {"b0": 0.1, "kb": 100.0}
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_write_refuses_to_overwrite(tmp_path):
+    top = read(tmp_path, HEADER + ATOMS + FOOTER)
+    out = tmp_path / "out.top"
+    top.write(out)
+    with pytest.raises(FileExistsError):
+        top.write(out)
+    top.write(out, overwrite=True)
+
+
+def test_interaction_update_is_restricted_to_existing_parameters(tmp_path):
+    top = read(tmp_path, HEADER + ATOMS + "[ bonds ]\n1 2 1 0.1 100\n" + FOOTER)
+    bond = top.moleculetype("MOL").bonds[0]
+    bond.update(kb=5.0)
+    assert bond.params["kb"] == 5.0
+    with pytest.raises(KeyError):
+        bond.update(new=1.0)
+    with pytest.raises(KeyError):
+        top.atoms[0].update(mass=2.0)
+    top.atomtype("A").update(sigma=0.5)
+    assert top.atomtype("A").sigma == 0.5
+
+
+# -- fixtures --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path, atoms",
+    [
+        (GROMACS_FIXTURES / "topol-spce.top", 3),
+        (GROMACS_FIXTURES / "topol-tip3p.top", 3),
+        (GROMACS_FIXTURES / "topol-tip4p.top", 4),
+        (GROMACS_FIXTURES / "topol-urea.top", 8),
+        (PARMED_FIXTURES / "01.1water/topol.top", 3),
+        (PARMED_FIXTURES / "02.6water/topol.top", 24),
+        (PARMED_FIXTURES / "03.AlaGlu/topol.top", 49),
+        (PARMED_FIXTURES / "07.DHFR-Liquid-NoPBC/topol.top", 23569),
+        (
+            PARMED_FIXTURES
+            / "11a.Toluene-Cyclohexane_conversion/toluene_cyclohexane_10_500_parmed.top",
+            9150,
+        ),
+        (PARMED_FIXTURES / "12.DPPC/topol.top", 1132),
+        (PARMED_FIXTURES / "12A.DPPC_Amber/topol.top", 1132),
+        (PROSECCO_FIXTURES / "topol-popc.top", 134),
+        (PROSECCO_FIXTURES / "topol-cmap.top", 5),
+    ],
+    ids=lambda p: p.parent.name + "/" + p.name if isinstance(p, Path) else str(p),
+)
+def test_fixture_topologies_roundtrip(tmp_path, path, atoms):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        top = Topology(path)
+    assert len(top.atoms) == atoms
+    again = roundtrip(tmp_path, top)
+    assert len(again.atoms) == atoms
+    assert interactions(again) == interactions(top)
+    assert [(m.name, n) for m, n in again.molecules] == [
+        (m.name, n) for m, n in top.molecules
+    ]
+
+
+def test_tip4p_virtual_sites_can_be_removed(tmp_path):
+    top = Topology(GROMACS_FIXTURES / "topol-tip4p.top")
+    mol = top.moleculetype("SOL")
+    assert len(mol.virtual_sites3) == 1
+    drop_vsites(mol)
+    assert len(mol.atoms) == 3
+    assert not mol.virtual_sites3
+    assert all(nr <= 3 for group in mol.exclusions for nr in group)
+    assert len(roundtrip(tmp_path, top).atoms) == 3
+
+
+def test_prosecco_popc_interactions():
+    top = Topology(PROSECCO_FIXTURES / "topol-popc.top")
+    mol = top.moleculetype("POPC_s")
+    assert (len(mol.atoms), len(mol.bonds), len(mol.pairs)) == (134, 133, 356)
+    assert (len(mol.angles), len(mol.dihedrals)) == (256, 467)
+
+
+def test_example_topologies_parse():
+    top = Topology(ROOT / "examples/topol.top")
+    assert [(m.name, n) for m, n in top.molecules] == [("POPC", 128), ("SOL", 8881)]
+    cond = Topology(ROOT / "examples/topol_new.top", defines={"mod": None})
+    assert [d.directive for d in cond.defines] == ["vsa", "charge"]

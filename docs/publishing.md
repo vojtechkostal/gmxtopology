@@ -67,8 +67,8 @@ Either:
    ```bash
    git switch main
    git pull --ff-only
-   git tag -a v0.2.0 -m "gmxtopology 0.2.0"
-   git push origin v0.2.0
+   git tag -a v0.3.0 -m "gmxtopology 0.3.0"
+   git push origin v0.3.0
    ```
 
 6. Run the `Publish Python Package` workflow manually with
